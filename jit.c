@@ -87,7 +87,7 @@ execute_memory[mm_counter++] = 0xC3;
 return;
 }
 
-int8_t mov_inst = {0xB8,ret_val,0x00,0x00,0x00};
+int8_t mov_inst[] = {0xB8,ret_val,0x00,0x00,0x00};
 
 memcpy(&execute_memory[mm_counter],&mov_inst,5);
 
@@ -108,7 +108,7 @@ memcpy(&execute_memory[mm_counter],&mov_inst,3);
 
 mm_counter +=3;
 
-int8_t sub_inst = {0x48,0x83,0xEC,loc_cont*8};
+int8_t sub_inst[] = {0x48,0x83,0xEC,loc_cont*8};
 
 memcpy(&execute_memory[mm_counter],&sub_inst,4);
 
@@ -124,9 +124,20 @@ execute_memory[mm_counter++] = val;
 
 void emit_remPrim()
 {
-int8_t sub_inst = {0x48,0x83,0xEC,8};
+int8_t sub_inst[] = {0x48,0x83,0xEC,8};
 memcpy(&execute_memory[mm_counter],&sub_inst,4);
 mm_counter += 4;
+}
+
+
+void emit_dup()
+{
+int8_t  mov_inst[] = {0x49,0x89,0xE0};
+memcpy(&execute_memory[mm_counter],&mov_inst,3);
+mm_counter += 3;
+
+execute_memory[mm_counter++] = 0x41;
+execute_memory[mm_counter++] = 0x50;
 }
 
 
@@ -161,5 +172,8 @@ switch(inst)
 	}
 	emit_ret(ret_val);	
 
+	case DUP:
+
+	emit_dup();
 }
 }

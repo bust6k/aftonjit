@@ -2,6 +2,7 @@
 #include<sys/mman.h>
 #include<string.h>
 #include<stdint.h>
+#include "map.c"
 
 // bytecode instructions for JIT compiler
 #define PUSH_PRIM 0x00
@@ -39,7 +40,7 @@
 int* execute_memory;
 static FILE* input_file;
 int mm_counter;
-
+Map* func_table;
 
 
 void  alloc(size_t len){
@@ -51,6 +52,7 @@ printf("\e[31mERROR\e[0m allocating memory error");
 return;
  }
 
+func_table = make_map();
 }
 
 void open_file(char* name,char* rights)
@@ -140,6 +142,15 @@ execute_memory[mm_counter++] = 0x41;
 execute_memory[mm_counter++] = 0x50;
 }
 
+
+//TODO: make generating body to machine code,reading signature and etc
+void make_func(char* name)
+{
+
+//stub
+int* s = 0x00;
+map_put(func_table,name,s);
+}
 
 int code_gen(int inst)
 {

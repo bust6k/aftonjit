@@ -102,7 +102,7 @@ void emit_prologue(int loc_cont)
 {
 execute_memory[mm_counter++] = 0x55;
 
-int8_t mov_inst = {0x48,0x89,0xE5};
+int8_t mov_inst[] = {0x48,0x89,0xE5};
 
 memcpy(&execute_memory[mm_counter],&mov_inst,3);
 

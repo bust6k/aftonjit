@@ -34,7 +34,8 @@
 #define DECL_STRUCT 0x4F
 
 // other
-#define NON_RET 0xFFFFF
+#define RET_VOID  0xFFFFF // just magic number
+#define RET_STACK 0xDEADA // just magic number
 
 // the global variables
 int* execute_memory;
@@ -83,10 +84,24 @@ return ch;
 
 void emit_ret(int ret_val)
 {
-if(ret_val == NON_RET)
+if(ret_val == RET_VOID)
 {
+
+int8_t mov_zero_inst[] = {0xB8,0x00,0x00,0x00,0x00};
+
+memcpy(&execute_memory[mm_counter],&mov_zero_inst,5);
+mm_counter += 5;
+
+execute_memory[mm_counter++] = 0xC9;
 execute_memory[mm_counter++] = 0xC3; 
 return;
+}
+
+if(ret_val == RET_STACK)
+{
+execute_memory[mm_counter++] = 0x58;
+execute_memory[mm_counter++] = 0xC9;
+execute_memory[mm_counter++] = 0xC3;
 }
 
 int8_t mov_inst[] = {0xB8,ret_val,0x00,0x00,0x00};
@@ -181,6 +196,9 @@ switch(inst)
 	{
 	return EOF;
 	}
+
+	
+
 	emit_ret(ret_val);	
 
 	case DUP:

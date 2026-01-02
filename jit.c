@@ -4,7 +4,7 @@
 #include<stdint.h>
 #include "map.c"
 
-// bytecode instructions for JIT compiler
+// bytecode instructions for jit compiler
 #define PUSH_PRIM 0x00
 #define REM_PRIM 0x01
 #define DUP 0x02
@@ -27,7 +27,7 @@
 #define STOREP 0x14
 #define LOADP 0x15
 #define DRFS 0x16
-// declarations for somwthing(like function declaration)
+// declarations for something(like a function declaration)
 #define FN 0x1F
 #define DECL_PRIM 0x2F
 #define DECL_PTR 0x3F
@@ -36,7 +36,7 @@
 // other
 #define NON_RET 0xFFFFF
 
-// you know what it is
+// the global variables
 int* execute_memory;
 static FILE* input_file;
 int mm_counter;

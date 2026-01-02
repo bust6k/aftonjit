@@ -158,9 +158,149 @@ execute_memory[mm_counter++] = 0x50;
 }
 
 
-//TODO: make generating body to machine code,reading signature and etc
-void make_func(char* name)
+//TODO: remove this bolierplate adn think loops and conditions
+void mov_args_to_regs(int args_count)
 {
+
+switch(args_count)
+{
+
+case 0:
+
+break;
+
+case 1:
+{
+int8_t  val = (int8_t)fgetc(input_file);
+int8_t mov_inst[] = {0xBF,val,0x00,0x00,0x00};
+memcpy(&execute_memory[mm_counter],&mov_inst,5);
+mm_counter += 5;
+}
+case 2:
+{
+  int8_t  val = (int8_t)fgetc(input_file);
+  int8_t mov_inst[] = {0xBF,val,0x00,0x00,0x00};
+  memcpy(&execute_memory[mm_counter],&mov_inst,5);
+  mm_counter += 5;
+
+  int8_t val1 = (int8_t)fgetc(input_file);
+  int8_t mov_inst1[] = {0xBE,val1,0x00,0x00,0x00};
+  memcpy(&execute_memory[mm_counter],&mov_inst1,5);
+  mm_counter += 5;
+}
+case 3:
+{
+    int8_t val1 = (int8_t)fgetc(input_file);
+    int8_t mov_inst1[] = {0xBF, val1, 0x00, 0x00, 0x00};
+    memcpy(&execute_memory[mm_counter], &mov_inst1, 5);
+    mm_counter += 5;
+
+    int8_t val2 = (int8_t)fgetc(input_file);
+    int8_t mov_inst2[] = {0xBE, val2, 0x00, 0x00, 0x00};
+    memcpy(&execute_memory[mm_counter], &mov_inst2, 5);
+    mm_counter += 5;
+
+    int8_t val3 = (int8_t)fgetc(input_file);
+    int8_t mov_inst3[] = {0xBA, val3, 0x00, 0x00, 0x00};
+    memcpy(&execute_memory[mm_counter], &mov_inst3, 5);
+    mm_counter += 5;
+    break;
+}
+
+case 4:
+{
+    int8_t val1 = (int8_t)fgetc(input_file);
+    int8_t mov_inst1[] = {0xBF, val1, 0x00, 0x00, 0x00};
+    memcpy(&execute_memory[mm_counter], &mov_inst1, 5);
+    mm_counter += 5;
+
+    int8_t val2 = (int8_t)fgetc(input_file);
+    int8_t mov_inst2[] = {0xBE, val2, 0x00, 0x00, 0x00};
+    memcpy(&execute_memory[mm_counter], &mov_inst2, 5);
+    mm_counter += 5;
+
+    int8_t val3 = (int8_t)fgetc(input_file);
+    int8_t mov_inst3[] = {0xBA, val3, 0x00, 0x00, 0x00};
+    memcpy(&execute_memory[mm_counter], &mov_inst3, 5);
+    mm_counter += 5;
+
+    int8_t val4 = (int8_t)fgetc(input_file);
+    int8_t mov_inst4[] = {0xB9, val4, 0x00, 0x00, 0x00};
+    memcpy(&execute_memory[mm_counter], &mov_inst4, 5);
+    mm_counter += 5;
+    break;
+}
+
+case 5:
+{
+    int8_t vals[5];
+    int8_t opcodes[] = {0xBF, 0xBE, 0xBA, 0xB9, 0x41, 0xB8};
+
+    for (int i = 0; i < 4; i++) {
+        vals[i] = (int8_t)fgetc(input_file);
+        int8_t mov_inst[] = {opcodes[i], vals[i], 0x00, 0x00, 0x00};
+        memcpy(&execute_memory[mm_counter], mov_inst, 5);
+        mm_counter += 5;
+    }
+    vals[4] = (int8_t)fgetc(input_file);
+    int8_t mov_r8[] = {0x41, 0xB8, vals[4], 0x00, 0x00, 0x00};
+    memcpy(&execute_memory[mm_counter], mov_r8, 6);
+    mm_counter += 6;
+    break;
+}
+
+case 6:
+{
+    int8_t vals[6];
+    int8_t opcodes[6][2] = {
+        {0xBF}, {0xBE}, {0xBA}, {0xB9},
+        {0x41, 0xB8}, {0x41, 0xB9}
+    };
+
+    for (int i = 0; i < 4; i++) {
+        vals[i] = (int8_t)fgetc(input_file);
+        int8_t mov_inst[] = {opcodes[i][0], vals[i], 0x00, 0x00, 0x00};
+        memcpy(&execute_memory[mm_counter], mov_inst, 5);
+        mm_counter += 5;
+    }
+    for (int i = 4; i < 6; i++) {
+        vals[i] = (int8_t)fgetc(input_file);
+        int8_t mov_inst[] = {opcodes[i][0], opcodes[i][1], vals[i], 0x00, 0x00, 0x00};
+        memcpy(&execute_memory[mm_counter], mov_inst, 6);
+        mm_counter += 6;
+    }
+    break;
+}
+}
+
+}
+
+//TODO: make generating body to machine code,reading signature and etc
+void make_func()
+{
+
+int val = fgetc(input_file);
+
+if(val != FN)
+{
+printf("error: function signature was changed during code executing");
+return;
+}
+
+// get locals count
+val = fgetc(input_file);
+
+emit_prologue(val);
+
+// get args count
+val = fgetc(input_file);
+
+if(val > 6)
+{
+printf("error: count of arguments cannot be greater than 6");
+return;
+}
+
 
 //stub
 int* s = 0x00;

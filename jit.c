@@ -152,7 +152,7 @@ int* s = 0x00;
 map_put(func_table,name,s);
 }
 
-int code_gen(int inst)
+int code_gen_inst(int inst)
 {
 
 switch(inst)

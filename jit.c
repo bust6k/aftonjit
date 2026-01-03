@@ -5,8 +5,8 @@
 #include "map.c"
 
 // bytecode instructions for jit compiler
-#define PUSH_PRIM 0x00
-#define REM_PRIM 0x01
+#define PUSH 0x00
+#define REM  0x01
 #define DUP 0x02
 #define AND 0x03
 #define OR 0x04
@@ -29,6 +29,8 @@
 #define DRFS 0x16
 // declarations for something(like a function declaration)
 #define FN 0x1F
+//end of function 
+#define END 0x5F 
 #define DECL_PRIM 0x2F
 #define DECL_PTR 0x3F
 #define DECL_STRUCT 0x4F
@@ -36,6 +38,14 @@
 // other
 #define RET_VOID  0xFFFFF // just magic number
 #define RET_STACK 0xDEADA // just magic number
+
+// arguments
+#define ARG1 0x1A
+#define ARG2 0x2A
+#define ARG3 0x3A
+#define ARG4 0x4A
+#define ARG5 0x5A
+#define ARG6 0x6A
 
 // the global variables
 int* execute_memory;
@@ -132,14 +142,14 @@ memcpy(&execute_memory[mm_counter],&sub_inst,4);
 mm_counter += 4;
 }
 
-void emit_pushPrim(int val)
+void emit_push(int val)
 {
 execute_memory[mm_counter++] = 0x6A;
 execute_memory[mm_counter++] = val;
 
 }
 
-void emit_remPrim()
+void emit_rem()
 {
 int8_t sub_inst[] = {0x48,0x83,0xEC,8};
 memcpy(&execute_memory[mm_counter],&sub_inst,4);
@@ -158,7 +168,7 @@ execute_memory[mm_counter++] = 0x50;
 }
 
 
-//TODO: remove this bolierplate adn think loops and conditions
+//TODO: remove this bolierplate and think loops and conditions
 void mov_args_to_regs(int args_count)
 {
 
@@ -275,44 +285,63 @@ case 6:
 
 }
 
-//TODO: make generating body to machine code,reading signature and etc
-void make_func()
+//TODO: make generating body to machine code
+void gen_func()
 {
 
-int val = fgetc(input_file);
+int fn_signature= fgetc(input_file);
 
-if(val != FN)
+if(fn_signature != FN)
 {
 printf("error: function signature was changed during code executing");
 return;
 }
 
-// get locals count
-val = fgetc(input_file);
 
-emit_prologue(val);
+int locals_c = fgetc(input_file);
 
-// get args count
-val = fgetc(input_file);
+if(locals_c > 100)
+{
+printf("error: count of local variables cannot be greater than 100");
+return;
+}
 
-if(val > 6)
+emit_prologue(locals_c);
+
+
+int args_c = fgetc(input_file);
+
+if(args_c > 6)
 {
 printf("error: count of arguments cannot be greater than 6");
 return;
 }
 
+mov_args_to_regs(args_c)
 
 //stub
 int* s = 0x00;
 map_put(func_table,name,s);
 }
 
+void gen_func_body()
+{
+int i = 0;
+
+while((i = fgetc(input_file)) != END)
+{
+//TODO: add if conditions for checking current
+// argument and if argument todo something
+// and also think how work with arguments 
+}
+
+}
 int code_gen_inst(int inst)
 {
 
 switch(inst)
 {
-	case PUSH_PRIM:
+	case PUSH:
 	
 	char push_val = read_next_instruction();
 
@@ -320,11 +349,11 @@ switch(inst)
 	{
 	return EOF;
 	}
-	emit_pushPrim(push_val);
+	emit_push(push_val);
 
-        case REM_PRIM:
+        case REM:
 	
-	emit_remPrim();
+	emit_rem();
 
 	case INVOKE:
 	
@@ -336,13 +365,13 @@ switch(inst)
 	{
 	return EOF;
 	}
-
-	
-
+  
 	emit_ret(ret_val);	
 
 	case DUP:
-
+  
 	emit_dup();
+  
 }
+
 }

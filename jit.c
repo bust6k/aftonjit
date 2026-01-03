@@ -27,6 +27,10 @@
 #define STOREP 0x14
 #define LOADP 0x15
 #define DRFS 0x16
+#define ADD 0x10
+#define SUB 0x17
+#define MUL 0x18
+#define DIV 0x19
 // declarations for something(like a function declaration)
 #define FN 0x1F
 //end of function 

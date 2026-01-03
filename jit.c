@@ -185,6 +185,7 @@ int8_t  val = (int8_t)fgetc(input_file);
 int8_t mov_inst[] = {0xBF,val,0x00,0x00,0x00};
 memcpy(&execute_memory[mm_counter],&mov_inst,5);
 mm_counter += 5;
+break;
 }
 case 2:
 {
@@ -197,6 +198,7 @@ case 2:
   int8_t mov_inst1[] = {0xBE,val1,0x00,0x00,0x00};
   memcpy(&execute_memory[mm_counter],&mov_inst1,5);
   mm_counter += 5;
+break;
 }
 case 3:
 {

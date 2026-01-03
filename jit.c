@@ -118,6 +118,11 @@ execute_memory[mm_counter++] = 0xC9;
 execute_memory[mm_counter++] = 0xC3;
 }
 
+if(ret_val >= ARG1 && ret_val <= ARG6)
+{
+//TODO: MAKE FUNCTION THAT DOES SOMETHING WITH IT
+}
+
 int8_t mov_inst[] = {0xB8,ret_val,0x00,0x00,0x00};
 
 memcpy(&execute_memory[mm_counter],&mov_inst,5);

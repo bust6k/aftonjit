@@ -174,7 +174,7 @@ execute_memory[mm_counter++] = 0x41;
 execute_memory[mm_counter++] = 0x50;
 }
 
-
+/*
 //TODO: remove this bolierplate and think loops and conditions
 void mov_args_to_regs(int args_count)
 {
@@ -293,10 +293,15 @@ case 6:
 }
 
 }
+*/
 
-//TODO: make generating body to machine code
-void gen_func()
+
+
+
+void gen_func(char* name)
 {
+
+int* func_addr = execute_memory;
 
 int fn_signature= fgetc(input_file);
 
@@ -326,23 +331,63 @@ printf("error: count of arguments cannot be greater than 6");
 return;
 }
 
-mov_args_to_regs(args_c)
+//mov_args_to_regs(args_c)
 
-//stub
-int* s = 0x00;
-map_put(func_table,name,s);
+gen_func_body();
+
+
+map_put(func_table,name,func_addr);
 }
 
-void gen_func_body()
+
+
+void  gen_func_body()
 {
 int i = 0;
+
 
 while((i = fgetc(input_file)) != END)
 {
 //TODO: add if conditions for checking current
 // argument and if argument todo something
 // and also think how work with arguments 
+
+int r = code_gen_inst(i);
+
+if(r ==EOF)
+{
+return;
 }
+
+}
+
+}
+
+char* get_name()
+{
+char* name = NULL;
+int i = 33;
+
+int j = 0;
+
+while((i = fgetc(input_file)) != '\0')
+{
+name[j] = i;
+}
+return name;
+}
+
+int emit_invoke(char* name)
+{
+char* addr = map_get(func_table,name);
+
+if(addr == NULL)
+{
+return -2;
+}
+
+execute_memory[mm_counter++] = 0xE8;
+execute_memory[mm_counter++] = (int)*addr;
 
 }
 int code_gen_inst(int inst)
@@ -366,6 +411,14 @@ switch(inst)
 
 	case INVOKE:
 	
+	char* n = get_name();
+	int r = emit_invoke(n);
+
+	if(r == -2)
+	{
+	return -2;
+	}
+
 	case RET:
 
 	char ret_val = read_next_instruction();

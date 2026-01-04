@@ -31,15 +31,18 @@
 #define SUB 0x17
 #define MUL 0x18
 #define DIV 0x19
-// declarations for something(like a function declaration)
+// function declaration 
 #define FN 0x1F
-//end of function 
 #define END 0x5F 
-#define DECL_PRIM 0x2F
+
+// type declaration 
+#define DECL_INT 0x2F
+#define DECL_CHAR 0x5F
+#define DECL_SHORT 0x6F
 #define DECL_PTR 0x3F
 #define DECL_STRUCT 0x4F
 
-// other
+// ret instruction extensions
 #define RET_VOID  0xFFFFF // just magic number
 #define RET_STACK 0xDEADA // just magic number
 

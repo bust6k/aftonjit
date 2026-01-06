@@ -54,24 +54,26 @@
 #define ARG5 0x5A
 #define ARG6 0x6A
 
+// global things for byte code 
+#define END_PRG 0xFE
+#define MAGIC 0x424356
+#define CURR_VERSION 0
+
 // the global variables
 int* execute_memory;
-int* original_memory;
 static FILE* input_file;
 int mm_counter;
 Map* func_table;
 
 
 void  alloc(size_t len){
- execute_memory = mmap(NULL,len, PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,0,0);
+ execute_memory = mmap(NULL,len,PROT_EXEC | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,0,0);
 
  if(execute_memory == NULL)
  {
 printf("\e[31mERROR\e[0m allocating memory error");
 return;
  }
-
- original_memory = execute_memory;
 
 func_table = make_map();
 }
@@ -303,6 +305,72 @@ case 6:
 
 
 
+
+void gen_func(char* name)
+{
+
+int* func_addr = execute_memory;
+
+int fn_signature= fgetc(input_file);
+
+if(fn_signature != FN)
+{
+printf("error: function signature was changed during code executing");
+return;
+}
+
+
+int locals_c = fgetc(input_file);
+
+if(locals_c > 100)
+{
+printf("error: count of local variables cannot be greater than 100");
+return;
+}
+
+emit_prologue(locals_c);
+
+
+int args_c = fgetc(input_file);
+
+if(args_c > 6)
+{
+printf("error: count of arguments cannot be greater than 6");
+return;
+}
+
+//mov_args_to_regs(args_c)
+
+gen_func_body();
+
+
+map_put(func_table,name,func_addr);
+}
+
+
+
+void  gen_func_body()
+{
+int i = 0;
+
+
+while((i = fgetc(input_file)) != END)
+{
+//TODO: add if conditions for checking current
+// argument and if argument todo something
+// and also think how work with arguments 
+
+int r = code_gen_inst(i);
+
+if(r ==EOF)
+{
+return;
+}
+
+}
+
+}
+
 char* get_name()
 {
 char* name = NULL;
@@ -317,8 +385,6 @@ name[j] = i;
 return name;
 }
 
-
-
 int emit_invoke(char* name)
 {
 char* addr = map_get(func_table,name);
@@ -331,10 +397,7 @@ return -2;
 execute_memory[mm_counter++] = 0xE8;
 execute_memory[mm_counter++] = (int)*addr;
 
-return 0;
 }
-
-
 int code_gen_inst(int inst)
 {
 
@@ -381,77 +444,4 @@ switch(inst)
   
 }
 
-return 0;
-}
-
-
-void  gen_func_body()
-{
-int i = 0;
-
-
-while((i = fgetc(input_file)) != END)
-{
-//TODO: add if conditions for checking current
-// argument and if argument todo something
-// and also think how work with arguments 
-
-int r = code_gen_inst(i);
-
-if(r ==EOF)
-{
-return;
-}
-
-}
-
-}
-
-void gen_func(char* name)
-{
-
-int* func_addr = execute_memory;
-
-int fn_signature= fgetc(input_file);
-
-if(fn_signature != FN)
-{
-printf("error: function signature was changed during code executing");
-return;
-}
-
-
-int locals_c = fgetc(input_file);
-
-if(locals_c > 100)
-{
-printf("error: count of local variables cannot be greater than 100");
-return;
-}
-
-emit_prologue(locals_c);
-
-
-int args_c = fgetc(input_file);
-
-if(args_c > 6)
-{
-printf("error: count of arguments cannot be greater than 6");
-return;
-}
-
-//mov_args_to_regs(args_c)
-
-gen_func_body();
-
-
-map_put(func_table,name,func_addr);
-}
-
-
-
-int main(int argc,char* argv[])
-{
-
-open_file(argv[1],"r");
 }

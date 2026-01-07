@@ -373,7 +373,7 @@ return;
 
 char* get_name()
 {
-char* name = NULL;
+char* name = malloc(15);
 int i = 33;
 
 int j = 0;
@@ -412,11 +412,11 @@ switch(inst)
 	return EOF;
 	}
 	emit_push(push_val);
-
+	break;
         case REM:
 	
 	emit_rem();
-
+	break;
 	case INVOKE:
 	
 	char* n = get_name();
@@ -426,7 +426,7 @@ switch(inst)
 	{
 	return -2;
 	}
-
+	break;
 	case RET:
 
 	char ret_val = read_next_instruction();
@@ -437,11 +437,11 @@ switch(inst)
 	}
   
 	emit_ret(ret_val);	
-
+	break;
 	case DUP:
   
 	emit_dup();
-  
+	break;
 }
 
 }

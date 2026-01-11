@@ -31,6 +31,8 @@
 #define SUB 0x17
 #define MUL 0x18
 #define DIV 0x19
+#define INVOKE_FLEX 0x1E
+
 // function declaration 
 #define FN 0x1F
 #define END 0x5F 
@@ -64,18 +66,47 @@ int* execute_memory;
 static FILE* input_file;
 int mm_counter;
 Map* func_table;
+Map* func_len_table;
 
+  
+int len(char* s)
+  {
+  int l = 0;
+  
+  while(*s != '\0')
+  {
+  ++l;
+  s++;
+ 
+ if(l >= 255)
+  {
+  return -2;
+  }
+
+  }
+
+  int* len = (int*)map_get(func_len_table,s);
+
+  if(len == NULL)
+  {
+  map_put(func_len_table,s,&l);
+  }
+
+  return l;
+  } 
 
 void  alloc(size_t len){
  execute_memory = mmap(NULL,len,PROT_EXEC | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,0,0);
 
  if(execute_memory == NULL)
  {
-printf("\e[31mERROR\e[0m allocating memory error");
+printf("ERROR: allocating memory error");
 return;
  }
 
 func_table = make_map();
+func_len_table = make_map();
+
 }
 
 void open_file(char* name,char* rights)
@@ -84,7 +115,7 @@ input_file = fopen(name,rights);
 
 if (input_file == NULL)
 {
-printf("\e[31mERROR\e[0m opening file %s:can't open it",name);
+printf("ERROR: opening file %s:can't open that",name);
 return;
 
 }
@@ -311,14 +342,14 @@ void gen_func(char* name)
 
 int* func_addr = execute_memory;
 
-int fn_signature= fgetc(input_file);
-
+//int fn_signature= fgetc(input_file);
+/*
 if(fn_signature != FN)
 {
 printf("error: function signature was changed during code executing");
 return;
 }
-
+*/
 
 int locals_c = fgetc(input_file);
 
@@ -371,9 +402,9 @@ return;
 
 }
 
-char* get_name()
+char* get_name(int len)
 {
-char* name = malloc(15);
+char* name = malloc(len);
 int i = 33;
 
 int j = 0;
@@ -397,7 +428,10 @@ return -2;
 execute_memory[mm_counter++] = 0xE8;
 execute_memory[mm_counter++] = (int)*addr;
 
+return 0;
 }
+
+
 int code_gen_inst(int inst)
 {
 
@@ -417,15 +451,19 @@ switch(inst)
 	
 	emit_rem();
 	break;
-	case INVOKE:
+	case INVOKE:	
 	
-	char* n = get_name();
+	int len = fgetc(input_file);
+          
+	char* n = get_name(len);
+	
 	int r = emit_invoke(n);
 
 	if(r == -2)
 	{
 	return -2;
 	}
+
 	break;
 	case RET:
 

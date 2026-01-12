@@ -31,7 +31,6 @@
 #define SUB 0x17
 #define MUL 0x18
 #define DIV 0x19
-#define INVOKE_FLEX 0x1E
 
 // function declaration 
 #define FN 0x1F
@@ -67,8 +66,10 @@ static FILE* input_file;
 int mm_counter;
 Map* func_table;
 Map* func_len_table;
+int* exec_clone;
 
-  
+ int code_gen_inst(int inst);
+
 int len(char* s)
   {
   int l = 0;
@@ -100,9 +101,17 @@ void  alloc(size_t len){
 
  if(execute_memory == NULL)
  {
-printf("ERROR: allocating memory error");
+printf("ERROR: allocating memory error \n");
 return;
  }
+
+ if(execute_memory == MAP_FAILED)
+ {
+printf("ERROR: map failed\n");
+return;
+ }
+
+ exec_clone = execute_memory;
 
 func_table = make_map();
 func_len_table = make_map();
@@ -115,7 +124,7 @@ input_file = fopen(name,rights);
 
 if (input_file == NULL)
 {
-printf("ERROR: opening file %s:can't open that",name);
+printf("ERROR: opening file %s:can't open that\n",name);
 return;
 
 }
@@ -181,11 +190,15 @@ memcpy(&execute_memory[mm_counter],&mov_inst,3);
 
 mm_counter +=3;
 
+if(loc_cont == 0)
+{
 int8_t sub_inst[] = {0x48,0x83,0xEC,loc_cont*8};
 
 memcpy(&execute_memory[mm_counter],&sub_inst,4);
 
 mm_counter += 4;
+}
+
 }
 
 void emit_push(int val)
@@ -335,51 +348,6 @@ case 6:
 */
 
 
-
-
-void gen_func(char* name)
-{
-
-int* func_addr = execute_memory;
-
-//int fn_signature= fgetc(input_file);
-/*
-if(fn_signature != FN)
-{
-printf("error: function signature was changed during code executing");
-return;
-}
-*/
-
-int locals_c = fgetc(input_file);
-
-if(locals_c > 100)
-{
-printf("error: count of local variables cannot be greater than 100");
-return;
-}
-
-emit_prologue(locals_c);
-
-
-int args_c = fgetc(input_file);
-
-if(args_c > 6)
-{
-printf("error: count of arguments cannot be greater than 6");
-return;
-}
-
-//mov_args_to_regs(args_c)
-
-gen_func_body();
-
-
-map_put(func_table,name,func_addr);
-}
-
-
-
 void  gen_func_body()
 {
 int i = 0;
@@ -401,6 +369,51 @@ return;
 }
 
 }
+
+void gen_func(char* name)
+{
+
+int* func_addr = execute_memory;
+
+//int fn_signature= fgetc(input_file);
+/*
+if(fn_signature != FN)
+{
+printf("error: function signature was changed during code executing\n");
+return;
+}
+*/
+
+int locals_c = fgetc(input_file);
+
+if(locals_c > 100)
+{
+printf("error: count of local variables cannot be greater than 100\n");
+return;
+}
+
+emit_prologue(locals_c);
+
+
+int args_c = fgetc(input_file);
+
+if(args_c > 6)
+{
+printf("error: count of arguments cannot be greater than 6\n");
+return;
+}
+
+//mov_args_to_regs(args_c)
+
+gen_func_body();
+
+
+map_put(func_table,name,func_addr);
+}
+
+
+
+
 
 char* get_name(int len)
 {
@@ -454,16 +467,17 @@ switch(inst)
 	case INVOKE:	
 	
 	int len = fgetc(input_file);
-          
+
 	char* n = get_name(len);
 	
 	int r = emit_invoke(n);
 
 	if(r == -2)
 	{
+	free(n);
 	return -2;
 	}
-
+	free(n);
 	break;
 	case RET:
 
@@ -480,6 +494,59 @@ switch(inst)
   
 	emit_dup();
 	break;
+
+	case FN:
+	
+	int curr = fgetc(input_file);
+
+	if(curr != FN)
+	{
+	printf("the current function was changed during execution\n");
+       return -2;	
+	}
+
+	int name_len = fgetc(input_file);
+
+	char* name = get_name(name_len);
+
+	gen_func(name);
+
+	free(name);
+	break;
+	
+	case END_PRG:
+	return -2;
+}
+return -2;
 }
 
+
+int main(int argc,char* argv[])
+{
+
+open_file(argv[1],"rb");
+
+alloc(4096);
+
+while(1)
+{
+int ret_val = code_gen_inst(read_next_instruction());
+
+if(ret_val == -2 || ret_val == EOF)
+{
+printf("compilation terminated\n");
+return 0;
 }
+}
+
+if(mprotect(exec_clone,4096,PROT_READ | PROT_EXEC) == -1)
+{
+printf("ERROR: changing memory rules  is failed\n");
+return -1;
+}
+  int (*func)() = (int(*)())exec_clone;
+
+  int res = func();
+
+  printf("result: %d\n",res);
+  }

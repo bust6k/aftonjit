@@ -44,8 +44,8 @@
 #define DECL_STRUCT 0x4F
 
 // ret instruction extensions
-#define RET_VOID  0xFFFFF // just magic number
-#define RET_STACK 0xDEADA // just magic number
+#define RET_VOID  0xFF // just magic number
+#define RET_STACK 0xDE // just magic number
 
 // arguments
 #define ARG1 0x1A
@@ -61,12 +61,12 @@
 #define CURR_VERSION 0
 
 // the global variables
-int* execute_memory;
+char* execute_memory;
 static FILE* input_file;
 int mm_counter;
 Map* func_table;
 Map* func_len_table;
-int* exec_clone;
+char* exec_clone;
 
  int code_gen_inst(int inst);
 
@@ -133,11 +133,17 @@ return;
 
 int read_next_instruction()
 {
+
 int ch = fgetc(input_file);
 
 if(ch == EOF)
 {
 return -1;
+}
+
+if(ch == 0xFE)
+{
+return -4;
 }
 
 return ch;
@@ -148,9 +154,11 @@ return ch;
 
 void emit_ret(int ret_val)
 {
+
+printf("если эта хуйня работает то вот ret_val: %X \n",ret_val);
 if(ret_val == RET_VOID)
 {
-
+printf("foo is bar RET VOID works");
 int8_t mov_zero_inst[] = {0xB8,0x00,0x00,0x00,0x00};
 
 memcpy(&execute_memory[mm_counter],&mov_zero_inst,5);
@@ -161,14 +169,17 @@ execute_memory[mm_counter++] = 0xC3;
 return;
 }
 
-if(ret_val == RET_STACK)
+else if(ret_val == RET_STACK)
 {
+printf("foo is bar RET STACK works");
 execute_memory[mm_counter++] = 0x58;
 execute_memory[mm_counter++] = 0xC9;
 execute_memory[mm_counter++] = 0xC3;
+return;
 }
 
-
+else
+{
 int8_t mov_inst[] = {0xB8,ret_val,0x00,0x00,0x00};
 
 memcpy(&execute_memory[mm_counter],&mov_inst,5);
@@ -177,6 +188,7 @@ mm_counter += 5;
 
 execute_memory[mm_counter++] = 0xC9;
 execute_memory[mm_counter++] = 0xC3;
+}
 }
 
 
@@ -190,7 +202,7 @@ memcpy(&execute_memory[mm_counter],&mov_inst,3);
 
 mm_counter +=3;
 
-if(loc_cont == 0)
+if(loc_cont != 0)
 {
 int8_t sub_inst[] = {0x48,0x83,0xEC,loc_cont*8};
 
@@ -210,7 +222,7 @@ execute_memory[mm_counter++] = val;
 
 void emit_rem()
 {
-int8_t sub_inst[] = {0x48,0x83,0xEC,8};
+int8_t sub_inst[] = {0x48,0x83,0xC4,8};
 memcpy(&execute_memory[mm_counter],&sub_inst,4);
 mm_counter += 4;
 }
@@ -373,7 +385,7 @@ return;
 void gen_func(char* name)
 {
 
-int* func_addr = execute_memory;
+char* func_addr = execute_memory;
 
 //int fn_signature= fgetc(input_file);
 /*
@@ -417,7 +429,7 @@ map_put(func_table,name,func_addr);
 
 char* get_name(int len)
 {
-char* name = malloc(len);
+char* name = malloc(len + 1);
 int i = 33;
 
 int j = 0;
@@ -425,22 +437,34 @@ int j = 0;
 while((i = fgetc(input_file)) != '\0')
 {
 name[j] = i;
+
+j++;
+
 }
+
+name[j] = '\0';
 return name;
 }
 
 int emit_invoke(char* name)
 {
-char* addr = map_get(func_table,name);
+int* addr = map_get(func_table,name);
 
 if(addr == NULL)
 {
 return -2;
 }
 
-execute_memory[mm_counter++] = 0xE8;
-execute_memory[mm_counter++] = (int)*addr;
+uint64_t fun_addr = (uint64_t)addr;
 
+execute_memory[mm_counter++] = 0x49;
+execute_memory[mm_counter++] = 0xBB;
+memcpy(&execute_memory[mm_counter],&fun_addr,8);
+mm_counter +=8;
+
+execute_memory[mm_counter++] = 0x41;
+execute_memory[mm_counter++] = 0xFF;
+execute_memory[mm_counter++] = 0xD3;
 return 0;
 }
 
@@ -451,7 +475,7 @@ int code_gen_inst(int inst)
 switch(inst)
 {
 	case PUSH:
-	
+	{	
 	char push_val = read_next_instruction();
 
 	if(push_val == EOF)
@@ -464,8 +488,10 @@ switch(inst)
 	
 	emit_rem();
 	break;
+        }
+
 	case INVOKE:	
-	
+	{
 	int len = fgetc(input_file);
 
 	char* n = get_name(len);
@@ -474,14 +500,15 @@ switch(inst)
 
 	if(r == -2)
 	{
-	free(n);
+	//free(n);
 	return -2;
 	}
-	free(n);
+	//free(n);
 	break;
+        }
 	case RET:
-
-	char ret_val = read_next_instruction();
+	{
+	unsigned char ret_val = read_next_instruction();
 
 	if(ret_val == EOF)
 	{
@@ -490,34 +517,30 @@ switch(inst)
   
 	emit_ret(ret_val);	
 	break;
+        }
 	case DUP:
-  
+	{
 	emit_dup();
 	break;
-
-	case FN:
-	
-	int curr = fgetc(input_file);
-
-	if(curr != FN)
-	{
-	printf("the current function was changed during execution\n");
-       return -2;	
 	}
-
+	case FN:
+        {	
+	
 	int name_len = fgetc(input_file);
 
 	char* name = get_name(name_len);
 
 	gen_func(name);
 
-	free(name);
+	//free(name);
 	break;
-	
+	}
 	case END_PRG:
-	return -2;
-}
-return -2;
+	{
+	return -4;
+	}
+	}
+return 0;
 }
 
 
@@ -526,27 +549,46 @@ int main(int argc,char* argv[])
 
 open_file(argv[1],"rb");
 
+
 alloc(4096);
 
 while(1)
 {
-int ret_val = code_gen_inst(read_next_instruction());
 
-if(ret_val == -2 || ret_val == EOF)
+int foo = read_next_instruction();
+
+
+if(foo == -4)
+{
+break;
+}
+
+
+int ret_val = code_gen_inst(foo);
+
+
+if(ret_val == -2 )
 {
 printf("compilation terminated\n");
-return 0;
-}
+return 1;
 }
 
+}
+
+FILE* f = fopen("jit_dump.bin", "wb");
+fwrite(exec_clone, 1, mm_counter, f);  
+fclose(f);
+printf("Dumped %d bytes to jit_dump.bin\n", mm_counter);
 if(mprotect(exec_clone,4096,PROT_READ | PROT_EXEC) == -1)
 {
 printf("ERROR: changing memory rules  is failed\n");
 return -1;
 }
+
   int (*func)() = (int(*)())exec_clone;
 
   int res = func();
 
   printf("result: %d\n",res);
+  
   }

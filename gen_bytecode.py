@@ -4,7 +4,7 @@ import struct
 def add_c_string(code, s):
 
     code.extend(s.encode('utf-8'))
-    code.append(0)  
+    code.append(0x00)  
     
     
 def create_test_file():
@@ -33,7 +33,7 @@ def create_test_file():
     
     code.append(0x07)
     
-    code.extend(struct.pack('<I', 0x000FFFFF))  
+    code.append(0xFF) 
     
     code.append(0x5F)
     
@@ -60,11 +60,12 @@ def create_test_file():
     code.append(0x02)
     
     code.append(0x01)
+
     
     code.append(0x07)
     
-    code.extend(struct.pack('<I', 0x000DEADA))
-    
+    code.append(0x12)
+
     code.append(0x5F)
     
     code.append(0xFE)

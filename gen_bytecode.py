@@ -10,7 +10,11 @@ def add_c_string(code, s):
 def create_test_file():
     
     code = bytearray()
-    
+
+    code.extend(struct.pack('<I', 0xFFF))  
+
+    code.append(0x01)
+
     code.append(0x1F)
 
     code.append(0x03)
@@ -61,9 +65,14 @@ def create_test_file():
     
     code.append(0x01)
 
-    
+#    code.append(0xB)
+
+ #   add_c_string(code,"foo")
+
     code.append(0x07)
-    
+
+ #   code.append(0x02)
+
     code.append(0x12)
 
     code.append(0x5F)

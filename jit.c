@@ -96,6 +96,32 @@ int len(char* s)
   return l;
   } 
 
+
+int check_magic()
+{
+
+uint32_t buf[1];
+
+int res = fread(buf,4,1,input_file);
+
+if(res != 1)
+{
+printf("error happens during reading magic number");
+return -1;
+}
+return 0;
+}
+
+int check_version(int byte)
+{
+
+if(byte != 1)
+{
+return -1;
+}
+return 0;
+}
+
 void  alloc(size_t len){
  execute_memory = mmap(NULL,len,PROT_EXEC | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,0,0);
 
@@ -552,6 +578,25 @@ open_file(argv[1],"rb");
 
 alloc(4096);
 
+int res = check_magic();
+
+if(res != 0)
+{
+printf("incorrect byte-code format,exepcted magic number 0xFFF :compilation failed\n");
+return 1;
+}
+
+
+
+int magic = read_next_instruction();
+res = check_version(magic);
+
+if(res != 0)
+{
+printf("incorrect byte-code version,expected version %d,got %d:compilation failed\n",1,magic);
+return 1;
+}
+
 while(1)
 {
 
@@ -587,8 +632,8 @@ return -1;
 
   int (*func)() = (int(*)())exec_clone;
 
-  int res = func();
+  int ress = func();
 
-  printf("result: %d\n",res);
+  printf("result: %d\n",ress);
   
   }

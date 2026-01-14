@@ -70,6 +70,8 @@ char* exec_clone;
 
  int code_gen_inst(int inst);
 
+#ifndef PRODUCT
+
 int len(char* s)
   {
   int l = 0;
@@ -95,6 +97,8 @@ int len(char* s)
 
   return l;
   } 
+
+#endif
 
 
 int check_magic()
@@ -620,10 +624,15 @@ return 1;
 
 }
 
+#ifndef PRODUCT 
+
 FILE* f = fopen("jit_dump.bin", "wb");
 fwrite(exec_clone, 1, mm_counter, f);  
 fclose(f);
 printf("Dumped %d bytes to jit_dump.bin\n", mm_counter);
+
+#endif
+
 if(mprotect(exec_clone,4096,PROT_READ | PROT_EXEC) == -1)
 {
 printf("ERROR: changing memory rules  is failed\n");
@@ -633,7 +642,14 @@ return -1;
   int (*func)() = (int(*)())exec_clone;
 
   int ress = func();
+   
+  #ifndef PRODUCT
 
   printf("result: %d\n",ress);
-  
+
+  #endif PRODUCT
+
+  #ifdef PRODUCT
+  printf("compilation gone successful\n");
+  #endif
   }

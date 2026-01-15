@@ -4,6 +4,7 @@
 #include<stdint.h>
 #include "map.c"
 
+
 // bytecode instructions for jit compiler
 #define PUSH 0x00
 #define REM  0x01
@@ -57,8 +58,6 @@
 
 // global things for byte code 
 #define END_PRG 0xFE
-#define MAGIC 0x424356
-#define CURR_VERSION 0
 
 // the global variables
 char* execute_memory;
@@ -185,10 +184,9 @@ return ch;
 void emit_ret(int ret_val)
 {
 
-printf("если эта хуйня работает то вот ret_val: %X \n",ret_val);
+
 if(ret_val == RET_VOID)
 {
-printf("foo is bar RET VOID works");
 int8_t mov_zero_inst[] = {0xB8,0x00,0x00,0x00,0x00};
 
 memcpy(&execute_memory[mm_counter],&mov_zero_inst,5);
@@ -201,7 +199,6 @@ return;
 
 else if(ret_val == RET_STACK)
 {
-printf("foo is bar RET STACK works");
 execute_memory[mm_counter++] = 0x58;
 execute_memory[mm_counter++] = 0xC9;
 execute_memory[mm_counter++] = 0xC3;
@@ -533,7 +530,7 @@ switch(inst)
 	//free(n);
 	return -2;
 	}
-	//free(n);
+	free(n);
 	break;
         }
 	case RET:
@@ -562,17 +559,17 @@ switch(inst)
 
 	gen_func(name);
 
-	//free(name);
+	free(name);
 	break;
 	}
 	case END_PRG:
 	{
 	return -4;
 	}
+	
 	}
 return 0;
 }
-
 
 int main(int argc,char* argv[])
 {
@@ -615,14 +612,15 @@ break;
 }
 
 
-int ret_val = code_gen_inst(foo);
+ code_gen_inst(foo);
 
-
+/*
 if(ret_val == -2 )
 {
-printf("compilation terminated\n");
+printf("compilation failed\n");
 return 1;
 }
+*/
 
 }
 
@@ -643,14 +641,7 @@ return -1;
 
   int (*func)() = (int(*)())exec_clone;
 
-  int ress = func();
-   
-  #ifndef PRODUCT
-
-  printf("result: %d\n",ress);
-
-  #endif 
-
+  func();
   #ifdef PRODUCT
   printf("compilation gone successful\n");
   #endif

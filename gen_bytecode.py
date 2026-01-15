@@ -78,7 +78,7 @@ def create_simple_proggram_file():
     code.append(0x01)
     code.append(0x01)
     code.append(0x07)
-    code.append(0x40)  # Исправлено: 0x400 не влезает в 1 байт, вероятно опечатка
+    code.append(0x40)  
     code.append(0x5F)
     code.append(0x1F)
     code.append(0x04)
@@ -108,8 +108,7 @@ def create_ret_test_file():
     add_c_string(code,"test_ret_prg")
     code.append(0x00)
     code.append(0x00)
-    code.append(0x00)
-    code.append(0xFF)
+    code.append(0x01)
     code.append(0x07)
     code.append(0xDE)
     code.append(0x5F)

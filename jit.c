@@ -612,15 +612,15 @@ break;
 }
 
 
- code_gen_inst(foo);
+ int ret_val = code_gen_inst(foo);
 
-/*
+
 if(ret_val == -2 )
 {
 printf("compilation failed\n");
 return 1;
 }
-*/
+
 
 }
 

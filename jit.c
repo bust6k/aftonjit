@@ -649,7 +649,7 @@ return -1;
 
   printf("result: %d\n",ress);
 
-  #endif PRODUCT
+  #endif 
 
   #ifdef PRODUCT
   printf("compilation gone successful\n");

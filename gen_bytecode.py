@@ -14,7 +14,7 @@ version 1 - is current byte-code format version. It means,the first version supp
 3. basic byte-code markers - FFF like magic number,and 1 like format version
 
 
-WARNING: magic number may vary from byte-code versions
+WARNING: magic number may vary from first byte-code versions and soon it will going stable
 """
 
 def add_c_string(code, s):

@@ -582,7 +582,17 @@ open_file(argv[1],"rb");
 
 alloc(4096);
 
-int res = check_magic();
+int magic = read_next_instruction();
+
+int res = check_version(magic);
+
+if(res != 0)
+{
+printf("incorrect byte-code version,expected version %d,got %d:compilation failed\n",1,magic);
+return 1;
+}
+
+res = check_magic();
 
 if(res != 0)
 {
@@ -592,14 +602,6 @@ return 1;
 
 
 
-int magic = read_next_instruction();
-res = check_version(magic);
-
-if(res != 0)
-{
-printf("incorrect byte-code version,expected version %d,got %d:compilation failed\n",1,magic);
-return 1;
-}
 
 while(1)
 {

@@ -3,7 +3,7 @@
 #include<string.h>
 #include<stdint.h>
 #include "map.c"
-
+#include<stdbool.h>
 
 // bytecode instructions for jit compiler
 #define PUSH 0x00
@@ -59,6 +59,25 @@
 // global things for byte code 
 #define END_PRG 0xFE
 
+// states for DFA
+#define S_START 0x01
+#define S_ARG1 0x02
+#define S_ARG2 0x03
+#define S_FOLDING 0x04
+
+// types of states for dfa
+#define T_OP 0x01
+#define T_ARG1 0x02
+#define T_ARG2 0x03
+
+int dfa_constant_fold[124][124] = {0};
+
+void init_dfa()
+{
+dfa_constant_fold[S_START][T_OP] = S_ARG1;
+dfa_constant_fold[S_ARG1][T_ARG1] = S_ARG2;
+dfa_constant_fold[S_ARG2][T_ARG2] = S_FOLDING;
+}
 // the global variables
 char* execute_memory;
 static FILE* input_file;
@@ -107,9 +126,9 @@ uint32_t buf[1];
 
 int res = fread(buf,4,1,input_file);
 
-if(res != 1)
+if(res > 2 || res < 1)
 {
-printf("error happens during reading magic number");
+printf("ERROR:format is too older or broken");
 return -1;
 }
 return 0;
@@ -145,6 +164,93 @@ return;
 func_table = make_map();
 func_len_table = make_map();
 
+}
+
+
+// returns true if fold succes. If false,invoker function need to emit_*ariphmetic_op*
+bool constant_folding()
+{
+int op = 0;
+int imm1 = 0;
+int imm2 = 0;
+int state = S_START;
+
+
+while(1)
+{
+
+if(state == S_FOLDING)
+{
+break;
+}
+
+int b = fgetc(input_file);
+
+  if(state == S_START)
+  {
+  op = b;
+ state =  dfa_constant_fold[state][T_OP];
+  }
+  
+else if(state == S_ARG1)
+  {
+  imm1 = b;
+  state = dfa_constant_fold[state][T_ARG1];
+  }
+  
+else if(state == S_ARG2)
+  {
+  imm2 = b;
+  state = dfa_constant_fold[state][T_ARG2];
+  }
+else
+{
+return false;
+}
+}
+//TODO: add on all of these cases check on stack overflow
+switch(op)
+{
+
+case ADD:
+int imm3 = imm1 + imm2;
+{
+// TODO:Since the 6A instruction pushes only bytw,on the future add conditions for check the size of imm3
+execute_memory[mm_counter++] = 0x6A;
+execute_memory[mm_counter++] = imm3;
+break;
+}
+case SUB:
+{
+int imm3 = imm1 - imm2;
+ execute_memory[mm_counter++] = 0x6A;
+ execute_memory[mm_counter++] = imm3;
+ break;
+}
+
+case MUL:
+{
+int imm3 = imm1 * imm2;
+ execute_memory[mm_counter++] = 0x6A;
+ execute_memory[mm_counter++] = imm3;
+break;
+}
+
+case DIV:
+{
+if(imm2 == 0x00)
+{
+printf("ERROR: divide on zero is forbidden");
+return 0;
+}
+
+int imm3 = imm1 / imm2;
+ execute_memory[mm_counter++] = 0x6A;
+ execute_memory[mm_counter++] = imm3;
+break;
+}
+}
+return 1;
 }
 
 void open_file(char* name,char* rights)

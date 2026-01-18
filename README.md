@@ -77,7 +77,7 @@ objdump -D -b binary -m i386:x86-64 jit_dump.bin
 
 You're seeing like this:
 
-
+```asm
 jit_dump.bin:     file format binary
 
 
@@ -90,3 +90,4 @@ Disassembly of section .data:
    5:	c9                   	leave
    6:	c3                   	ret
 
+```

@@ -1,5 +1,5 @@
 # Introduction
-**AftonJIT** - is a jit compiler for afton byte-code that built simple and flexibility,instead llvm. The current AftonJIT version is **0.1** ,the current format version is **1** and its magic number is 0xFFF . Afton V1 supports 5 instructions: 
+**AftonJIT** - is a jit compiler for afton bytecode designed simple and flexibility. The current AftonJIT version is **0.1** ,the current format version is **1** and its magic number is 0xFFF. Afton V1 supports 5 instructions: 
 
 - push
 - rem
@@ -7,7 +7,7 @@
 - invoke(without arguments)
 - dup
 
-Also it supports functions. But variables not provided in that version,yet. 
+Also it supports functions, without arguments and variables 
 
 Now,AftonJIT as target supports only x86_64.
 

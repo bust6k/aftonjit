@@ -4,6 +4,7 @@
 #include<stdint.h>
 #include "map.c"
 #include<stdbool.h>
+#include<limits.h>
 
 // bytecode instructions for jit compiler
 #define PUSH 0x00
@@ -285,7 +286,56 @@ return ch;
 }
 
 
+void emit_add(int a,int b)
+{
+int8_t mov_a_to_r8[] = {0x41,0xB8,a,0x00,0x00,0x00};
+memcpy(&execute_memory[mm_counter],&mov_a_to_r8,6);
+int8_t mov_b_to_r9[] = {0x41,0xB9,b,0x00,0x00,0x00};
+ memcpy(&execute_memory[mm_counter],&mov_b_to_r9,6);
+int8_t add[] = {0x41,0x01,0xC8};
+ memcpy(&execute_memory[mm_counter],&add,3);
+int8_t push[] = {0x41,0x50};
+ memcpy(&execute_memory[mm_counter],&push,2);
+}
 
+void emit_sub(int a,int b)
+{
+int8_t mov_a_to_r8[] = {0x41,0xB8,a,0x00,0x00,0x00};
+memcpy(&execute_memory[mm_counter],&mov_a_to_r8,6);
+int8_t mov_b_to_r9[] = {0x41,0xB9,b,0x00,0x00,0x00};
+ memcpy(&execute_memory[mm_counter],&mov_b_to_r9,6);
+int8_t sub[] = {0x4d,0x29,0xC8};
+ memcpy(&execute_memory[mm_counter],&sub,3);
+int8_t push[] = {0x41,0x50};
+ memcpy(&execute_memory[mm_counter],&push,2);
+
+}
+
+void emit_mul(int a,int b)
+{
+int8_t mov_a_to_r8[] = {0x41,0xB8,a,0x00,0x00,0x00};
+memcpy(&execute_memory[mm_counter],&mov_a_to_r8,6);
+int8_t mov_b_to_r9[] = {0x41,0xB9,b,0x00,0x00,0x00};
+ memcpy(&execute_memory[mm_counter],&mov_b_to_r9,6);
+int8_t mul[] = {0x4D,0xF,0xAF,0xC1};
+ memcpy(&execute_memory[mm_counter],&mul,4);
+int8_t push[] = {0x41,0x50};
+ memcpy(&execute_memory[mm_counter],&push,2);
+
+}
+
+void emit_div(int a,int b)
+{
+int8_t mov_a_to_r8[] = {0x41,0xB8,a,0x00,0x00,0x00};
+memcpy(&execute_memory[mm_counter],&mov_a_to_r8,6);
+int8_t mov_b_to_r9[] = {0x41,0xB9,b,0x00,0x00,0x00};
+ memcpy(&execute_memory[mm_counter],&mov_b_to_r9,6);
+int8_t add[] = {0x41,0x01,0xC8};
+ memcpy(&execute_memory[mm_counter],&add,3);
+int8_t push[] = {0x41,0x50};
+ memcpy(&execute_memory[mm_counter],&push,2);
+
+}
 
 void emit_ret(int ret_val)
 {
@@ -348,6 +398,8 @@ mm_counter += 4;
 
 void emit_push(int val)
 {
+//TODO: make checks on char,short,int and long maixmum. if it greater than 1 byte,to do following
+
 execute_memory[mm_counter++] = 0x6A;
 execute_memory[mm_counter++] = val;
 
@@ -355,6 +407,7 @@ execute_memory[mm_counter++] = val;
 
 void emit_rem()
 {
+
 int8_t sub_inst[] = {0x48,0x83,0xC4,8};
 memcpy(&execute_memory[mm_counter],&sub_inst,4);
 mm_counter += 4;

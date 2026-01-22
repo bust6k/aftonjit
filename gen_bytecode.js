@@ -1,9 +1,9 @@
 // This file is generator for each test uses all opportunities of the current JIT-engine
-// FFF - is magic for afton byte-code of version 1
-// version 1 - is current byte-code format version. It means,the first version supports only:
-// 1. 5 instructions: push,rem,ret,invoke(arguments not support) ,dup
+// AFFE - is magic for afton byte-code of version 2
+// version 2 - is current byte-code format version. It means,the first version supports only:
+// 1. 9 instructions: push,rem,ret,invoke(arguments not support) ,dup, sub, add,mul,div
 // 2. function declaration
-// 3. basic byte-code markers - FFF like magic number,and 1 like format version
+// 3. basic byte-code markers - AFFE like magic number,and 2 like format version
 // WARNING: magic number may vary from first byte-code versions and soon it will going stable
 
 import * as std from "std"

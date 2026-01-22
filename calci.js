@@ -1,0 +1,5 @@
+let num = 0b00000000000000000000000011111111
+console.log(num.toString(16))
+
+let num1 = 0b00000000000000001111111100000000
+console.log(num1.toString(16))

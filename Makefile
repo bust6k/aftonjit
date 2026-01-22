@@ -5,6 +5,7 @@ CFLAGS_TCC_DEBUG=-Wall   $(FILES) -o aftonjit
 FILES=jit.c
 GCC=gcc
 TCC=tcc
+QuickJS=qjs
 gcc:
 	$(GCC) $(CFLAGS_GCC)
 tcc:
@@ -15,3 +16,5 @@ tcc_debug:
 	$(TCC) $(CFLAGS_TCC_DEBUG)
 clean:
 	rm -f ./aftonjit
+test:
+	$(QuickJS) gen_bytecode.js

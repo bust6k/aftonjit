@@ -62,7 +62,7 @@ The next map displays mnemonic and its correspond opcode for writing real afton 
 
 For testing something proggrams,you can execute like this:
 ```bash
-python gen_bytecode.py
+make test
 ```
 
 That command generates 4 test files and their names  you may execute with ./aftonjit command

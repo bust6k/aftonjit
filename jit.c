@@ -127,18 +127,18 @@ uint32_t buf[1];
 
 int res = fread(buf,4,1,input_file);
 
-if(res > 2 || res < 1)
+if(res != 0xAFFE)
 {
-printf("ERROR:format is too older or broken");
 return -1;
 }
+
 return 0;
 }
 
 int check_version(int byte)
 {
 
-if(byte != 1)
+if(byte > 2 || byte < 1)
 {
 return -1;
 }
@@ -324,17 +324,21 @@ int8_t push[] = {0x41,0x50};
 
 }
 
+//TODO:make it normal. and also add incrementic of execute_memory 
 void emit_div(int a,int b)
 {
-int8_t mov_a_to_r8[] = {0x41,0xB8,a,0x00,0x00,0x00};
-memcpy(&execute_memory[mm_counter],&mov_a_to_r8,6);
-int8_t mov_b_to_r9[] = {0x41,0xB9,b,0x00,0x00,0x00};
- memcpy(&execute_memory[mm_counter],&mov_b_to_r9,6);
+// rcx choosen just for fun
+// using of bit operations here it's just tip to add normal 32-64 bit numbers support
+int8_t mov_a_to_rcx[] = {0x48,0xB9,(a & 0xFF),((a & 0xFF00) >> 8),((a & 0xFF0000) >> 16),((a & 0xFF000000) >> 24)};
+memcpy(&execute_memory[mm_counter],&mov_a_to_rcx,6);
+int8_t xor_rdx_rdx[] = {0x4D,0x33,0xD2};
+ memcpy(&execute_memory[mm_counter],&xor_rdx_rdx,3);
 int8_t add[] = {0x41,0x01,0xC8};
  memcpy(&execute_memory[mm_counter],&add,3);
-int8_t push[] = {0x41,0x50};
- memcpy(&execute_memory[mm_counter],&push,2);
-
+int8_t mov_b_to_rbx[] = {0x48,0xBB,b,0x00,0x00,0x00};
+ memcpy(&execute_memory[mm_counter],&mov_b_to_rbx,6);
+int8_t div_inst[] = {0x48,0xF7,0xF1};
+memcpy(&execute_memory[mm_counter],&div_inst,3);
 }
 
 void emit_ret(int ret_val)

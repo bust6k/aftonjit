@@ -1,6 +1,6 @@
 // This file is generator for each test uses all opportunities of the current JIT-engine
 // AFFE - is magic for afton byte-code of version 2
-// version 2 - is current byte-code format version. It means,the first version supports only:
+// version 2 - is current byte-code format version. It means,the second version supports only:
 // 1. 9 instructions: push,rem,ret,invoke(arguments not support) ,dup, sub, add,mul,div
 // 2. function declaration
 // 3. basic byte-code markers - AFFE like magic number,and 2 like format version

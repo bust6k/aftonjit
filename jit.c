@@ -339,6 +339,8 @@ int8_t mov_b_to_rbx[] = {0x48,0xBB,b,0x00,0x00,0x00};
  memcpy(&execute_memory[mm_counter],&mov_b_to_rbx,6);
 int8_t div_inst[] = {0x48,0xF7,0xF1};
 memcpy(&execute_memory[mm_counter],&div_inst,3);
+int8_t push[] = {0x41,53};
+memcpy(&execute_memory[mm_counter],&push,2};
 }
 
 void emit_ret(int ret_val)

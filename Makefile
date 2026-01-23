@@ -17,4 +17,5 @@ tcc_debug:
 clean:
 	rm -f ./aftonjit
 test:
+	# TODO: tommorow embeding QuickJS into AftonJIT. 
 	$(QuickJS) gen_bytecode.js

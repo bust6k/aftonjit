@@ -5,8 +5,10 @@
 #include "map.c"
 #include<stdbool.h>
 #include<limits.h>
+#include<unistd.h>
+#include<assert.h>
 
-// bytecode instructions for jit compiler
+// bytecode instructions for AftonJIT
 #define PUSH 0x00
 #define REM  0x01
 #define DUP 0x02
@@ -21,9 +23,7 @@
 #define INVOKE 0xB
 #define CMPTLT 0xC
 #define SHL 0xD
-#define SHR 0xE
-#define DRF 0xF
-#define INCLUDENEAR 0x11
+#define SHR 0xE #define DRF 0xF #define INCLUDENEAR 0x11
 #define STORE 0x12
 #define LOAD 0x13
 #define STOREP 0x14
@@ -65,19 +65,32 @@
 #define S_ARG1 0x02
 #define S_ARG2 0x03
 #define S_FOLDING 0x04
-
-// types of states for dfa
+// states for DCE DFA
+#define S_INSTR1 0x02
+#define S_INSTR2 0x03
+#define S_DCE 0x04
+// types of states for DFA
 #define T_OP 0x01
 #define T_ARG1 0x02
 #define T_ARG2 0x03
 
+// types for DCE DFA
+#define T_INSTR1 0x01
+#define T_INSTR2 0x02
+#define T_END 0x03
+
 int dfa_constant_fold[124][124] = {0};
+int dfa_dce[124][124] = {0};
 
 void init_dfa()
 {
 dfa_constant_fold[S_START][T_OP] = S_ARG1;
 dfa_constant_fold[S_ARG1][T_ARG1] = S_ARG2;
 dfa_constant_fold[S_ARG2][T_ARG2] = S_FOLDING;
+
+dfa_dce[S_START][T_INSTR1] = S_INSTR1;
+dfa_dce[S_INSTR1][T_INSTR2] = S_INSTR2;
+dfa_dce[S_INSTR2][T_END] = S_DCE;
 }
 // the global variables
 char* execute_memory;
@@ -86,8 +99,10 @@ int mm_counter;
 Map* func_table;
 Map* func_len_table;
 char* exec_clone;
+bool enable_optimizations_at_each_instruction = false;
+int code_gen_inst(int inst);
 
- int code_gen_inst(int inst);
+
 
 #ifndef PRODUCT
 
@@ -117,7 +132,7 @@ int len(char* s)
   return l;
   } 
 
-#endif
+#endif //PRODUCT
 
 
 int check_magic()
@@ -186,26 +201,30 @@ break;
 }
 
 int b = fgetc(input_file);
-
+assert(b != EOF);
   if(state == S_START)
   {
   op = b;
  state =  dfa_constant_fold[state][T_OP];
+ continue;
   }
   
 else if(state == S_ARG1)
   {
   imm1 = b;
   state = dfa_constant_fold[state][T_ARG1];
+  continue;
   }
   
 else if(state == S_ARG2)
   {
   imm2 = b;
   state = dfa_constant_fold[state][T_ARG2];
+  continue;
   }
 else
 {
+fseek(input_file,-3,SEEK_CUR);
 return false;
 }
 }
@@ -216,7 +235,7 @@ switch(op)
 case ADD:
 int imm3 = imm1 + imm2;
 {
-// TODO:Since the 6A instruction pushes only bytw,on the future add conditions for check the size of imm3
+// TODO:Since the 6A instruction pushes only byte,on the future add conditions for check the size of imm3
 execute_memory[mm_counter++] = 0x6A;
 execute_memory[mm_counter++] = imm3;
 break;
@@ -241,7 +260,8 @@ case DIV:
 {
 if(imm2 == 0x00)
 {
-printf("ERROR: divide on zero is forbidden");
+
+printf("ERROR: divide at zero is forbidden");
 return 0;
 }
 
@@ -250,8 +270,113 @@ int imm3 = imm1 / imm2;
  execute_memory[mm_counter++] = imm3;
 break;
 }
+
+default:
+{
+ fseek(input_file,-3,SEEK_CUR);
+return false;
 }
-return 1;
+
+}
+return true;
+}
+
+bool dead_code_elimination()
+{
+int instr1 = 0;
+int instr1_imm1 = 0;
+int  instr1_imm2 = 0;
+int instr2 = 0;
+int instr2_imm1 = 0;
+int instr2_imm2 = 0;
+int state = S_START;
+
+while(1)
+{
+
+if(state == S_DCE)
+{
+break;
+}
+
+if(state == S_START)
+{
+state = dfa_dce[state][T_INSTR1];
+}
+
+int thing = fgetc(input_file);
+assert(thing != EOF);
+if(state == S_INSTR1)
+{
+
+	//     6
+//check if the current insruciton has no arguments,and if has no then just add new instruction1 and change the state
+//TODO: in this switch-case add skipping of conditions,ret,includes.
+switch(thing)
+{
+case DUP: case REM: case PUSH: instr1 = thing; state = dfa_dce[state][T_INSTR1];continue;
+
+default:
+instr1 = thing;
+thing = fgetc(input_file);
+assert(thing != EOF);
+instr1_imm1 = thing;
+thing = fgetc(input_file);
+assert(thing != EOF);
+instr1_imm2 = thing;
+state = dfa_dce[state][T_INSTR1];
+continue;
+}
+
+}
+
+else if(state == S_INSTR2)
+{
+  switch(thing)
+  {
+  case DUP: case REM: case PUSH: instr2 = thing; state = dfa_dce[state][T_INSTR2];continue;
+  
+  default:
+  instr2 = thing;
+  thing = fgetc(input_file);
+  assert(thing != EOF);
+  instr2_imm1 = thing;
+  thing = fgetc(input_file);
+  assert(thing != EOF);
+  instr2_imm2 = thing;
+  state = dfa_dce[state][T_INSTR2];
+  continue;
+
+}
+
+}
+
+
+/*
+else if(instr1 == ADD && instr2 == SUB)
+{
+if(((int)(*instr1_imm1) + (int)(*instr1_imm2)) == ((int)(*instr2_imm1) + (int)(*instr2_imm2)))
+{
+return true;
+}
+*/
+
+
+
+} //while(1)
+
+  if(instr1 == DUP && instr2 == REM)
+  {
+  return true;
+  }
+  else if(instr1 == PUSH && instr2 == REM)
+  {
+  return true;
+  }
+code_gen_inst(instr1);
+code_gen_inst(instr2);
+fseek(input_file,-6,SEEK_CUR);
+return false;
 }
 
 void open_file(char* name,char* rights)
@@ -290,38 +415,48 @@ void emit_add(int a,int b)
 {
 int8_t mov_a_to_r8[] = {0x41,0xB8,a,0x00,0x00,0x00};
 memcpy(&execute_memory[mm_counter],&mov_a_to_r8,6);
+mm_counter+=6;
 int8_t mov_b_to_r9[] = {0x41,0xB9,b,0x00,0x00,0x00};
  memcpy(&execute_memory[mm_counter],&mov_b_to_r9,6);
-int8_t add[] = {0x41,0x01,0xC8};
+mm_counter+=6;
+ int8_t add[] = {0x41,0x01,0xC8};
  memcpy(&execute_memory[mm_counter],&add,3);
-int8_t push[] = {0x41,0x50};
+mm_counter+=3;
+ int8_t push[] = {0x41,0x50};
  memcpy(&execute_memory[mm_counter],&push,2);
+mm_counter+=2;
 }
 
 void emit_sub(int a,int b)
 {
 int8_t mov_a_to_r8[] = {0x41,0xB8,a,0x00,0x00,0x00};
 memcpy(&execute_memory[mm_counter],&mov_a_to_r8,6);
+mm_counter+=6;
 int8_t mov_b_to_r9[] = {0x41,0xB9,b,0x00,0x00,0x00};
  memcpy(&execute_memory[mm_counter],&mov_b_to_r9,6);
-int8_t sub[] = {0x4d,0x29,0xC8};
+mm_counter+=6;
+ int8_t sub[] = {0x4d,0x29,0xC8};
  memcpy(&execute_memory[mm_counter],&sub,3);
-int8_t push[] = {0x41,0x50};
+mm_counter+=3;
+ int8_t push[] = {0x41,0x50};
  memcpy(&execute_memory[mm_counter],&push,2);
-
+mm_counter+=2;
 }
 
 void emit_mul(int a,int b)
 {
 int8_t mov_a_to_r8[] = {0x41,0xB8,a,0x00,0x00,0x00};
 memcpy(&execute_memory[mm_counter],&mov_a_to_r8,6);
+mm_counter+=6;
 int8_t mov_b_to_r9[] = {0x41,0xB9,b,0x00,0x00,0x00};
  memcpy(&execute_memory[mm_counter],&mov_b_to_r9,6);
-int8_t mul[] = {0x4D,0xF,0xAF,0xC1};
+mm_counter+=6;
+ int8_t mul[] = {0x4D,0xF,0xAF,0xC1};
  memcpy(&execute_memory[mm_counter],&mul,4);
-int8_t push[] = {0x41,0x50};
+ mm_counter+=4;
+ int8_t push[] = {0x41,0x50};
  memcpy(&execute_memory[mm_counter],&push,2);
-
+mm_counter+=2;
 }
 
 //TODO:make it normal. and also add incrementic of execute_memory 
@@ -331,16 +466,19 @@ void emit_div(int a,int b)
 // using of bit operations here it's just tip to add normal 32-64 bit numbers support
 int8_t mov_a_to_rcx[] = {0x48,0xB9,(a & 0xFF),((a & 0xFF00) >> 8),((a & 0xFF0000) >> 16),((a & 0xFF000000) >> 24)};
 memcpy(&execute_memory[mm_counter],&mov_a_to_rcx,6);
+mm_counter+=6;
 int8_t xor_rdx_rdx[] = {0x4D,0x33,0xD2};
  memcpy(&execute_memory[mm_counter],&xor_rdx_rdx,3);
-int8_t add[] = {0x41,0x01,0xC8};
- memcpy(&execute_memory[mm_counter],&add,3);
-int8_t mov_b_to_rbx[] = {0x48,0xBB,b,0x00,0x00,0x00};
+mm_counter+=3;
+ int8_t mov_b_to_rbx[] = {0x48,0xBB,b,0x00,0x00,0x00};
  memcpy(&execute_memory[mm_counter],&mov_b_to_rbx,6);
-int8_t div_inst[] = {0x48,0xF7,0xF1};
+mm_counter+=6;
+ int8_t div_inst[] = {0x48,0xF7,0xF1};
 memcpy(&execute_memory[mm_counter],&div_inst,3);
-int8_t push[] = {0x41,53};
-memcpy(&execute_memory[mm_counter],&push,2};
+mm_counter+=3;
+int8_t push[] = {0x41,0x51};
+memcpy(&execute_memory[mm_counter],&push,2);
+mm_counter+=2;
 }
 
 void emit_ret(int ret_val)
@@ -736,6 +874,40 @@ switch(inst)
 return 0;
 }
 
+
+void exec_opts(int argc,char*argv[])
+{
+
+int current_option = 0;
+#define OPTIONS_ARE_OVER -1
+
+while((current_option = getopt(argc,argv,"o:")) != OPTIONS_ARE_OVER)
+{
+
+switch(current_option)
+{
+case 'o':
+
+int level = atoi(optarg);
+
+if(level == 1)
+{
+init_dfa();
+enable_optimizations_at_each_instruction = true;
+break;
+}
+else
+{
+enable_optimizations_at_each_instruction = false;
+break;
+}
+
+}
+
+}
+
+}
+
 int main(int argc,char* argv[])
 {
 
@@ -776,7 +948,44 @@ if(foo == -4)
 break;
 }
 
+if(enable_optimizations_at_each_instruction)
+{
+bool is_done = constant_folding();
 
+if(!is_done)
+{
+int thing = fgetc(input_file);
+assert(thing != EOF);
+int ret_val = code_gen_inst(thing);
+
+if(ret_val == -2)
+{
+printf("compilation failed\n");
+return 1;
+}
+
+}
+
+is_done = dead_code_elimination();
+
+ if(!is_done)
+  {
+  int thing = fgetc(input_file);
+  assert(thing != EOF);
+  int ret_val = code_gen_inst(thing);
+
+  if(ret_val == -2)
+  {
+  printf("compilation failed\n");
+  return 1;
+  }
+
+  }
+
+
+}
+else
+{
  int ret_val = code_gen_inst(foo);
 
 
@@ -786,6 +995,7 @@ printf("compilation failed\n");
 return 1;
 }
 
+}
 
 }
 
@@ -796,7 +1006,7 @@ fwrite(exec_clone, 1, mm_counter, f);
 fclose(f);
 printf("Dumped %d bytes to jit_dump.bin\n", mm_counter);
 
-#endif
+#endif //PRODUCT
 
 if(mprotect(exec_clone,4096,PROT_READ | PROT_EXEC) == -1)
 {
@@ -809,5 +1019,5 @@ return -1;
   func();
   #ifdef PRODUCT
   printf("compilation gone successful\n");
-  #endif
+  #endif //PRODUCT
   }

@@ -125,6 +125,51 @@ function createWrongByHeaderFile() {
     return code.slice(0, o);
 }
 
+function testConstantFolding(){
+let code = new Uint8Array(40);
+let o = 0;
+code[o++] = 0x02;
+o = createUint32(code, o, 0xAFFE);
+code[o++] = 0x1F;
+code[o++] = 0x05;
+o = addCString(code,o,"foooo");
+code[o++] = 0x10;
+code[o++] = 0x40;
+code[o++] = 0x50;
+code[o++] = 0x17;
+code[o++] = 0x50;
+code[o++] = 0x10;
+code[o++] = 0x18;
+code[o++] = 0x05;
+code[o++] = 0x04;
+code[o++] = 0x19;
+code[o++] = 0x14;
+code[o++] = 0x04;
+code[o++] = 0x5F;
+code[o++] = 0xFE;
+return code.slice(0,o);
+}
+
+function testDeadCodeElimination(){
+let code = new Uint8Array(40);
+let o = 0;
+code[o++] = 0x02;
+o = createUint32(code, o, 0xAFFE);
+code[o++] = 0x1F;
+code[o++] = 0x05;
+o = addCString(code,o,"foooo");
+code[o++] = 0x00;
+code[o++]  = 0x0F;
+code[o++] = 0x01;
+code[o++] = 0x02;
+code[o++] = 0x01;
+code[o++] = 0x07;
+code[o++] = 0xFF;
+code[o++] = 0x5F;
+code[o++] = 0xFE;
+return code.slice(0,o);
+}
+
 function writeFile(name, data) {
     let f = std.open(name, "w");
     let str = "";
@@ -139,4 +184,6 @@ writeFile('test_base.afton', createBasicWorkWithStackFile());
 writeFile('test_simple.afton', createSimpleProgramFile());
 writeFile('test_ret.afton', createRetTestFile());
 writeFile('test_wrong.afton', createWrongByHeaderFile());
+writeFile('test_cf.afton',testConstantFolding());
+writeFile('test_dce.afton',testDeadCodeElimination());
 print("test files generated");

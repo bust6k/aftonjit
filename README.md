@@ -1,3 +1,6 @@
+[NOTE: Since AftonJIT has the big refactoring at zig,it has no updates for now]
+
+
 # Introduction
 **AftonJIT** - is a jit compiler for afton bytecode designed simple and flexibility. The current AftonJIT version is **0.1** ,the current format version is **1** and its magic number is 0xFFF. Afton V1 supports 5 instructions: 
 

@@ -23,7 +23,9 @@
 #define INVOKE 0xB
 #define CMPTLT 0xC
 #define SHL 0xD
-#define SHR 0xE #define DRF 0xF #define INCLUDENEAR 0x11
+#define SHR 0xE
+#define DRF 0xF 
+#define INCLUDENEAR 0x11
 #define STORE 0x12
 #define LOAD 0x13
 #define STOREP 0x14
@@ -140,9 +142,9 @@ int check_magic()
 
 uint32_t buf[1];
 
-int res = fread(buf,4,1,input_file);
+int res = fgetc(input_file);
 
-if(res != 0xAFFE)
+if(res != 0xAF)
 {
 return -1;
 }
@@ -289,7 +291,7 @@ int  instr1_imm2 = 0;
 int instr2 = 0;
 int instr2_imm1 = 0;
 int instr2_imm2 = 0;
-int state = S_START;
+int state = S_INSTR1;
 
 while(1)
 {
@@ -299,14 +301,23 @@ if(state == S_DCE)
 break;
 }
 
+/*
 if(state == S_START)
 {
 state = dfa_dce[state][T_INSTR1];
 }
+*/
 
 int thing = fgetc(input_file);
-assert(thing != EOF);
-if(state == S_INSTR1)
+
+if(thing == EOF)
+{
+break;
+}
+
+//assert(thing != EOF);
+
+if(state == S_START)
 {
 
 	//     6
@@ -314,7 +325,30 @@ if(state == S_INSTR1)
 //TODO: in this switch-case add skipping of conditions,ret,includes.
 switch(thing)
 {
-case DUP: case REM: case PUSH: instr1 = thing; state = dfa_dce[state][T_INSTR1];continue;
+case DUP:
+{
+ instr1 = thing;
+ state = dfa_dce[state][T_INSTR1];
+// continue;
+}
+case PUSH:
+{
+   instr1 = thing;
+   state = dfa_dce[state][T_INSTR1];
+   //continue;
+  
+
+}
+
+case REM:
+{
+   instr1 = thing;
+   state = dfa_dce[state][T_INSTR1];
+  // continue;
+  
+
+
+}
 
 default:
 instr1 = thing;
@@ -325,16 +359,19 @@ thing = fgetc(input_file);
 assert(thing != EOF);
 instr1_imm2 = thing;
 state = dfa_dce[state][T_INSTR1];
-continue;
+//continue;
 }
 
 }
 
-else if(state == S_INSTR2)
+else if(state == S_INSTR1)
 {
   switch(thing)
   {
-  case DUP: case REM: case PUSH: instr2 = thing; state = dfa_dce[state][T_INSTR2];continue;
+  case DUP: case REM: case PUSH: 
+instr2 = thing;
+state = dfa_dce[state][T_INSTR2];
+// continue;
   
   default:
   instr2 = thing;
@@ -345,11 +382,16 @@ else if(state == S_INSTR2)
   assert(thing != EOF);
   instr2_imm2 = thing;
   state = dfa_dce[state][T_INSTR2];
-  continue;
-
+  //continue;
+//
+}
+}
+else if(state == S_INSTR2)
+{
+state = dfa_dce[state][T_END];
 }
 
-}
+
 
 
 /*
@@ -375,6 +417,8 @@ return true;
   }
 code_gen_inst(instr1);
 code_gen_inst(instr2);
+
+//XXX: here's maybe the bug. Since optimization  may skip arguments of functions it can to read only 2 bytes. If bug is real,then add a check if argument is readed. And if readed,then seek 5 arguments,if not then seek 2 args
 fseek(input_file,-6,SEEK_CUR);
 return false;
 }
@@ -911,6 +955,12 @@ break;
 int main(int argc,char* argv[])
 {
 
+enable_optimizations_at_each_instruction = true;
+
+init_dfa();
+
+//exec_opts(argc,argv);
+
 open_file(argv[1],"rb");
 
 
@@ -926,14 +976,17 @@ printf("incorrect byte-code version,expected version %d,got %d:compilation faile
 return 1;
 }
 
+/*
 res = check_magic();
 
-if(res != 0)
+if(res != 0xAF)
 {
-printf("incorrect byte-code format,exepcted magic number 0xFFF :compilation failed\n");
+printf("incorrect byte-code format,exepcted magic number 0xAF :compilation failed\n");
+printf("file position:%d \n",ftell(input_file));
+printf("the value is:%X\n",res);
 return 1;
 }
-
+*/
 
 
 
@@ -948,10 +1001,21 @@ if(foo == -4)
 break;
 }
 
+
 if(enable_optimizations_at_each_instruction)
 {
+
 bool is_done = constant_folding();
 
+//printf("[JIT] CF state not invoke segfault");
+
+  FILE* f = fopen("jit_dump.bin", "wb");
+  fwrite(exec_clone, 1, mm_counter, f);
+  fclose(f);
+  printf("Dumped %d bytes to jit_dump.bin\n", mm_counter);
+
+
+/*
 if(!is_done)
 {
 int thing = fgetc(input_file);
@@ -965,8 +1029,10 @@ return 1;
 }
 
 }
-
+*/
 is_done = dead_code_elimination();
+
+printf("[JIT] DCE state not invoke segfault");
 
  if(!is_done)
   {

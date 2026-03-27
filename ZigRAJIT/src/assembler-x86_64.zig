@@ -84,7 +84,7 @@ fn getOsName(os: builtin.target.os.tag) ![]u8 {
 pub fn changeMemoryRights(address: [*]u8, length: usize, protection: usize) !void {
     switch (builtin.target.os.tag) {
         .linux, .macos => {
-            const prot: usize  = switch (protection) {
+            const prot: usize = switch (protection) {
                 1 => std.os.linux.PROT.READ,
                 2 => std.os.linux.PROT.WRITE,
                 3 => std.os.linux.PROT.READ | std.os.linux.PROT.WRITE,
@@ -118,52 +118,46 @@ pub fn changeMemoryRights(address: [*]u8, length: usize, protection: usize) !voi
 ///
 /// internally uses registers for store data  to operations or stack if all registers are busy
 pub fn instr_add(emit: *em.Emitter, a: u64, b: u64) !void {
-    try rex(emit, 1, 0, 0, 1);
-    try movImm(emit, u64, Register.r8, a);
-    try rex(emit, 1, 0, 0, 1);
-    try movImm(emit, u64, Register.r9, b);
+    try movImm(emit, u64, Register.rax, a);
+    try movImm(emit, u64, Register.rcx, b);
 
-    try rex(emit, 1, 1, 0, 1);
+    try rex(emit, 1, 0, 0, 0);
     try emit.emit(0x01);
-    try modrm(emit, 0b11, @intFromEnum(Register.r8), @intFromEnum(Register.r9));
+    try modrm(emit, 0b11, @intFromEnum(Register.rcx), @intFromEnum(Register.rax));
 
-    try rex(emit, 1, 0, 0, 1);
-    try pushReg(emit, Register.r8);
+    try rex(emit, 1, 0, 0, 0);
+    try pushReg(emit, Register.rax);
 }
 
 ///instr_sub subs two  64-bit numbers or variables and puts calculated value onto the stack
 ///
 /// internally uses registers for store data  to operations or stack if all registers are busy
 pub fn instr_sub(emit: *em.Emitter, a: u64, b: u64) !void {
-    try rex(emit, 1, 0, 0, 1);
-    try movImm(emit, u64, Register.r8, a);
-    try rex(emit, 1, 0, 0, 1);
-    try movImm(emit, u64, Register.r9, b);
+    try movImm(emit, u64, Register.rax, a);
+    try movImm(emit, u64, Register.rcx, b);
 
-    try rex(emit, 1, 1, 0, 1);
+    try rex(emit, 1, 0, 0, 0);
     try emit.emit(0x29);
-    try modrm(emit, 0b11, @intFromEnum(Register.r8), @intFromEnum(Register.r9));
+    try modrm(emit, 0b11, @intFromEnum(Register.rcx), @intFromEnum(Register.rax));
 
-    try rex(emit, 1, 0, 0, 1);
-    try pushReg(emit, Register.r8);
+    try rex(emit, 1, 0, 0, 0);
+    try pushReg(emit, Register.rax);
 }
 
 ///instr_mul multiplies two  64-bit numbers or variables and puts calculated value onto the stack
 ///
 /// internally uses registers for store data  to operations or stack if all registers are busy
 pub fn instr_mul(emit: *em.Emitter, a: u64, b: u64) !void {
-    try rex(emit, 1, 0, 0, 1);
-    try movImm(emit, u64, Register.r8, a);
-    try rex(emit, 1, 0, 0, 1);
-    try movImm(emit, u64, Register.r9, b);
+    try movImm(emit, u64, Register.rax, a);
+    try movImm(emit, u64, Register.rcx, b);
 
-    try rex(emit, 1, 1, 0, 1);
+    try rex(emit, 1, 0, 0, 0);
     try escape(emit);
     try emit.emit(0xAF);
-    try modrm(emit, 0b11, @intFromEnum(Register.r8), @intFromEnum(Register.r9));
+    try modrm(emit, 0b11, @intFromEnum(Register.rax), @intFromEnum(Register.rcx));
 
-    try rex(emit, 1, 0, 0, 1);
-    try pushReg(emit, Register.r8);
+    try rex(emit, 1, 0, 0, 0);
+    try pushReg(emit, Register.rax);
 }
 
 ///instr_div divides  two  64-bit numbers or variables and puts calculated value onto the stack
@@ -177,7 +171,6 @@ pub fn instr_div(emit: *em.Emitter, a: u64, b: u64) !void {
         return error.ErrorDivideByNull;
     }
 
-    try rex(emit, 1, 0, 0, 0);
     try movImm(emit, u64, Register.rax, a);
 
     try rex(emit, 1, 0, 0, 0);
@@ -188,7 +181,7 @@ pub fn instr_div(emit: *em.Emitter, a: u64, b: u64) !void {
 
     try rex(emit, 1, 0, 0, 0);
     try emit.emit(0xF7);
-    try modrm(emit, 0b11, 0b110, @intFromEnum(Register.rax));
+    try modrm(emit, 0b11, 0b110, @intFromEnum(Register.rbx));
     try rex(emit, 1, 0, 0, 0);
     try pushReg(emit, Register.rax);
 }
@@ -253,13 +246,13 @@ pub fn instr_dup(emit: *em.Emitter) !void {
 ///
 ///if locals count equals zero,no sub instruction generated
 pub fn fun_prologue(emit: *em.Emitter, loc_count: u8) !void {
-    try pushImm(emit, u64, Register.rbp);
+    try pushReg(emit, Register.rbp);
     try rex(emit, 1, 0, 0, 0);
     try movRegs(emit, Register.rsp, Register.rbp);
 
     if (loc_count != 0) {
         if (loc_count > 100) {
-            log.fatal("arguments count at function cannot be greater than 100");
+            log.fatal("arguments count at function cannot be greater than 100", .{});
             return error.ErrorTooManyLocals;
         }
         try rex(emit, 1, 0, 0, 0);
@@ -315,6 +308,7 @@ pub fn movImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void
             try rex(emit, 1, 0, 0, 1);
             try emit.emit(0xB8 | @intFromEnum(dest));
             try emit.emitQuad(@as(u64, val));
+            return;
         }
 
         try rex(emit, 1, 0, 0, 0);
@@ -335,7 +329,7 @@ pub inline fn popReg(emit: *em.Emitter, regNumber: Register) !void {
 
 pub fn movRegs(emit: *em.Emitter, src: Register, dest: Register) !void {
     try emit.emit(0x89);
-    try emit.emit(0xC0 | (@intFromEnum(src) << 3) | @intFromEnum(dest));
+    try modrm(emit, 0x03, @intFromEnum(src), @intFromEnum(dest));
 }
 
 pub fn subImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void {
@@ -349,7 +343,7 @@ pub fn subImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void
         }
 
         try emit.emit(0x81);
-        try modrm(emit, 0xC0, @intFromEnum(dest), @intFromEnum(dest));
+        try modrm(emit, 0x03, 0x05, @intFromEnum(dest));
         try emit.emitDWord(@as(u32, val));
     } else {
         if (isAccumulator(dest)) {
@@ -361,15 +355,13 @@ pub fn subImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void
             try movImm(emit, u64, @intFromEnum(Register.rcx), val);
             try rex(emit, 1, 0, 0, 1);
             try emit.emit(0x29);
-            try modrm(emit, 0xC0, @intFromEnum(Register.rcx), dest);
-            try emit.emitQuad(val);
+            try modrm(emit, 0x03, @intFromEnum(Register.rcx), dest);
         }
 
         try movImm(emit, u64, @intFromEnum(Register.rcx), val);
         try rex(emit, 1, 0, 0, 0);
         try emit.emit(0x29);
-        try modrm(emit, 0xC0, @intFromEnum(Register.rcx), dest);
-        try emit.emitQuad(val);
+        try modrm(emit, 0x03, @intFromEnum(Register.rcx), dest);
     }
 }
 
@@ -469,8 +461,10 @@ test "instr_div" {
     const allocator = gpa.allocator();
 
     var emitter = try em.Emitter.init(allocator, 4);
+
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try instr_div(&emitter, 10, 5);
     try emitter.emit(0xC9);
     try emitter.emit(0xC3);
@@ -478,13 +472,12 @@ test "instr_div" {
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 5);
 
     const func = @as(*const fn () u64, @ptrCast(emitter.buffer.ptr));
-    const res = func();
-    
+
+    const res: u64 = func();
 
     try testing.expect(res == 2);
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
 }
-
 
 //TODO: that function work incorrect. fix div and them too
 test "instr_mul" {
@@ -495,17 +488,19 @@ test "instr_mul" {
     var emitter = try em.Emitter.init(allocator, 4);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try instr_mul(&emitter, 5, 4);
+    try emitter.emit(0xC9);
     try emitter.emit(0xC3);
 
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 5);
 
     const func = @as(*const fn () u64, @ptrCast(emitter.buffer.ptr));
 
-    const res = func();
-    try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
+    const res: u64 = func();
 
     try testing.expect(res == 20);
+    try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
 }
 
 test "instr_sub" {
@@ -516,7 +511,9 @@ test "instr_sub" {
     var emitter = try em.Emitter.init(allocator, 4);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try instr_sub(&emitter, 5, 4);
+    try emitter.emit(0xC9);
     try emitter.emit(0xC3);
 
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 5);
@@ -527,6 +524,7 @@ test "instr_sub" {
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
 
     try testing.expect(res == 1);
+    try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
 }
 
 test "instr_add" {
@@ -537,7 +535,9 @@ test "instr_add" {
     var emitter = try em.Emitter.init(allocator, 4);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 1);
     try instr_add(&emitter, 5, 4);
+    try emitter.emit(0xC9);
     try emitter.emit(0xC3);
 
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 5);
@@ -548,6 +548,7 @@ test "instr_add" {
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
 
     try testing.expect(res == 9);
+    try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
 }
 
 test "pushReg" {
@@ -556,11 +557,15 @@ test "pushReg" {
     var emitter = try em.Emitter.init(gpa.allocator(), 16);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try pushReg(&emitter, Register.rax);
-    try testing.expect(emitter.buffer[0] == 0x50);
+    try testing.expect(emitter.buffer[4] == 0x50);
 
     try pushReg(&emitter, Register.r8);
-    try testing.expect(emitter.buffer[1] == 0x50);
+
+    try testing.expect(emitter.buffer[5] == 0x50);
+    try emitter.emit(0xC9);
+    try emitter.emit(0xC3);
 }
 
 test "pushImm" {
@@ -569,12 +574,13 @@ test "pushImm" {
     var emitter = try em.Emitter.init(gpa.allocator(), 32);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try pushImm(&emitter, u32, 0x12345678);
-    try testing.expect(emitter.buffer[0] == 0x68);
-    try testing.expect(emitter.buffer[1] == 0x78);
-    try testing.expect(emitter.buffer[2] == 0x56);
-    try testing.expect(emitter.buffer[3] == 0x34);
-    try testing.expect(emitter.buffer[4] == 0x12);
+    try testing.expect(emitter.buffer[4] == 0x68);
+    try testing.expect(emitter.buffer[5] == 0x78);
+    try testing.expect(emitter.buffer[6] == 0x56);
+    try testing.expect(emitter.buffer[7] == 0x34);
+    try testing.expect(emitter.buffer[8] == 0x12);
 }
 
 test "movImm" {
@@ -583,12 +589,13 @@ test "movImm" {
     var emitter = try em.Emitter.init(gpa.allocator(), 32);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try movImm(&emitter, u32, Register.rax, 0x12345678);
-    try testing.expect(emitter.buffer[0] == 0xB8 | 0);
-    try testing.expect(emitter.buffer[1] == 0x78);
-    try testing.expect(emitter.buffer[2] == 0x56);
-    try testing.expect(emitter.buffer[3] == 0x34);
-    try testing.expect(emitter.buffer[4] == 0x12);
+    try testing.expect(emitter.buffer[4] == 0xB8 | 0);
+    try testing.expect(emitter.buffer[5] == 0x78);
+    try testing.expect(emitter.buffer[6] == 0x56);
+    try testing.expect(emitter.buffer[7] == 0x34);
+    try testing.expect(emitter.buffer[8] == 0x12);
 }
 
 test "movMemValToReg" {
@@ -597,10 +604,11 @@ test "movMemValToReg" {
     var emitter = try em.Emitter.init(gpa.allocator(), 16);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try movMemValToReg(&emitter, Register.rax, Register.rsp);
-    try testing.expect(emitter.buffer[0] == 0x8B);
-    try testing.expect(emitter.buffer[1] == 0x04);
-    try testing.expect(emitter.buffer[2] == 0x24);
+    try testing.expect(emitter.buffer[4] == 0x8B);
+    try testing.expect(emitter.buffer[5] == 0x04);
+    try testing.expect(emitter.buffer[6] == 0x24);
 }
 
 test "popReg" {
@@ -609,11 +617,12 @@ test "popReg" {
     var emitter = try em.Emitter.init(gpa.allocator(), 16);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try popReg(&emitter, Register.rax);
-    try testing.expect(emitter.buffer[0] == 0x58);
+    try testing.expect(emitter.buffer[4] == 0x58);
 
     try popReg(&emitter, Register.r8);
-    try testing.expect(emitter.buffer[1] == 0x58 | 0);
+    try testing.expect(emitter.buffer[5] == 0x58 | 0);
 }
 
 test "movRegs" {
@@ -622,9 +631,10 @@ test "movRegs" {
     var emitter = try em.Emitter.init(gpa.allocator(), 16);
     defer emitter.deinit();
 
+    try fun_prologue(&emitter, 0);
     try movRegs(&emitter, Register.rax, Register.rbx);
-    try testing.expect(emitter.buffer[0] == 0x89);
-    try testing.expect(emitter.buffer[1] == 0xC0 | (0 << 3) | 3);
+    try testing.expect(emitter.buffer[4] == 0x89);
+    try testing.expect(emitter.buffer[5] == 0xC0 | (0 << 3) | 3);
 }
 
 test "subImm" {
@@ -647,6 +657,7 @@ test "subImm" {
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
 
     try testing.expect(res == 118);
+    try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
 }
 
 test "rex" {
@@ -701,4 +712,4 @@ test "sib" {
     try testing.expect(emitter.buffer[2] == 0x1E);
 }
 
-
+pub fn main() void {}

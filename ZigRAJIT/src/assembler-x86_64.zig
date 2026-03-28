@@ -59,7 +59,7 @@ fn init() !void {
 /// error ErrorUnsupportedOs occured if AftonJIT not working with current os
 fn getOsName(os: builtin.target.os.tag) ![]u8 {
     switch (os) {
-        .linux => {
+       .linux => {
             return "Linux";
         },
         .macos => {
@@ -114,6 +114,10 @@ pub fn changeMemoryRights(address: [*]u8, length: usize, protection: usize) !voi
     }
 }
 
+fn castReg(reg: Register) u8 {
+return @intFromEnum(reg);
+}
+
 ///instr_add adds two  64-bit numbers or variables and puts calculated value  onto the stack
 ///
 /// internally uses registers for store data  to operations or stack if all registers are busy
@@ -123,7 +127,7 @@ pub fn instr_add(emit: *em.Emitter, a: u64, b: u64) !void {
 
     try rex(emit, 1, 0, 0, 0);
     try emit.emit(0x01);
-    try modrm(emit, 0b11, @intFromEnum(Register.rcx), @intFromEnum(Register.rax));
+    try modrm(emit, 0b11, castReg(Register.rcx), castReg(Register.rax));
 
     try rex(emit, 1, 0, 0, 0);
     try pushReg(emit, Register.rax);
@@ -138,7 +142,7 @@ pub fn instr_sub(emit: *em.Emitter, a: u64, b: u64) !void {
 
     try rex(emit, 1, 0, 0, 0);
     try emit.emit(0x29);
-    try modrm(emit, 0b11, @intFromEnum(Register.rcx), @intFromEnum(Register.rax));
+    try modrm(emit, 0b11, castReg(Register.rcx), castReg(Register.rax));
 
     try rex(emit, 1, 0, 0, 0);
     try pushReg(emit, Register.rax);
@@ -154,7 +158,7 @@ pub fn instr_mul(emit: *em.Emitter, a: u64, b: u64) !void {
     try rex(emit, 1, 0, 0, 0);
     try escape(emit);
     try emit.emit(0xAF);
-    try modrm(emit, 0b11, @intFromEnum(Register.rax), @intFromEnum(Register.rcx));
+    try modrm(emit, 0b11, castReg(Register.rax), castReg(Register.rcx));
 
     try rex(emit, 1, 0, 0, 0);
     try pushReg(emit, Register.rax);
@@ -175,13 +179,13 @@ pub fn instr_div(emit: *em.Emitter, a: u64, b: u64) !void {
 
     try rex(emit, 1, 0, 0, 0);
     try emit.emit(0x33);
-    try modrm(emit, 0b11, @intFromEnum(Register.rdx), @intFromEnum(Register.rdx));
+    try modrm(emit, 0b11, castReg(Register.rdx), castReg(Register.rdx));
 
     try movImm(emit, u64, Register.rbx, b);
 
     try rex(emit, 1, 0, 0, 0);
     try emit.emit(0xF7);
-    try modrm(emit, 0b11, 0b110, @intFromEnum(Register.rbx));
+    try modrm(emit, 0b11, 0b110, castReg(Register.rbx));
     try rex(emit, 1, 0, 0, 0);
     try pushReg(emit, Register.rax);
 }
@@ -270,7 +274,7 @@ pub inline fn fromSpecialToCommonRegister(regNumber: Register) u8 {
         .r13 => return 5,
         .r14 => return 6,
         .r15 => return 7,
-        else => return @intFromEnum(regNumber),
+        else => return castReg(regNumber),
     }
 }
 
@@ -281,7 +285,7 @@ pub inline fn pushReg(emit: *em.Emitter, regNumber: Register) !void {
         return;
     }
 
-    try emit.emit(0x50 | @intFromEnum(regNumber));
+    try emit.emit(0x50 | castReg(regNumber));
 }
 
 pub fn pushImm(emit: *em.Emitter, comptime T: type, val: T) !void {
@@ -301,35 +305,35 @@ pub fn movImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void
     const size = @sizeOf(T);
 
     if (size <= 4) {
-        try emit.emit(0xB8 | @intFromEnum(dest));
+        try emit.emit(0xB8 | castReg(dest));
         try emit.emitDWord(@as(u32, @intCast(val)));
     } else {
         if (isExtended(dest)) {
             try rex(emit, 1, 0, 0, 1);
-            try emit.emit(0xB8 | @intFromEnum(dest));
+            try emit.emit(0xB8 | castReg(dest));
             try emit.emitQuad(@as(u64, val));
             return;
         }
 
         try rex(emit, 1, 0, 0, 0);
-        try emit.emit(0xB8 | @intFromEnum(dest));
+        try emit.emit(0xB8 | castReg(dest));
         try emit.emitQuad(@as(u64, val));
     }
 }
 
 pub inline fn movMemValToReg(emit: *em.Emitter, reg: Register, base: Register) !void {
     try emit.emit(0x8B);
-    try modrm(emit, 0x00, @intFromEnum(reg), 0b100);
-    try sib(emit, 0, 0b100, @intFromEnum(base));
+    try modrm(emit, 0x00, castReg(reg), 0b100);
+    try sib(emit, 0, 0b100, castReg(base));
 }
 
 pub inline fn popReg(emit: *em.Emitter, regNumber: Register) !void {
-    try emit.emit(0x58 | @intFromEnum(regNumber));
+    try emit.emit(0x58 | castReg(regNumber));
 }
 
 pub fn movRegs(emit: *em.Emitter, src: Register, dest: Register) !void {
     try emit.emit(0x89);
-    try modrm(emit, 0x03, @intFromEnum(src), @intFromEnum(dest));
+    try modrm(emit, 0x03, castReg(src), castReg(dest));
 }
 
 pub fn subImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void {
@@ -343,7 +347,7 @@ pub fn subImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void
         }
 
         try emit.emit(0x81);
-        try modrm(emit, 0x03, 0x05, @intFromEnum(dest));
+        try modrm(emit, 0x03, 0x05, castReg(dest));
         try emit.emitDWord(@as(u32, val));
     } else {
         if (isAccumulator(dest)) {
@@ -352,21 +356,21 @@ pub fn subImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void
             try emit.emitQuad(@as(u64, val));
             return;
         } else if (isExtended(dest)) {
-            try movImm(emit, u64, @intFromEnum(Register.rcx), val);
+            try movImm(emit, u64, castReg(Register.rcx), val);
             try rex(emit, 1, 0, 0, 1);
             try emit.emit(0x29);
-            try modrm(emit, 0x03, @intFromEnum(Register.rcx), dest);
+            try modrm(emit, 0x03, castReg(Register.rcx), dest);
         }
 
-        try movImm(emit, u64, @intFromEnum(Register.rcx), val);
+        try movImm(emit, u64, castReg(Register.rcx), val);
         try rex(emit, 1, 0, 0, 0);
         try emit.emit(0x29);
-        try modrm(emit, 0x03, @intFromEnum(Register.rcx), dest);
+        try modrm(emit, 0x03, castReg(Register.rcx), dest);
     }
 }
 
 inline fn isExtended(reg: Register) bool {
-    return @intFromEnum(reg) >= 8 and @intFromEnum(reg) <= 15;
+    return castReg(reg) >= 8 and castReg(reg) <= 15;
 }
 
 inline fn isAccumulator(reg: Register) bool {
@@ -687,8 +691,8 @@ test "modrm" {
     var emitter = try em.Emitter.init(allocator, 2);
     defer emitter.deinit();
 
-    try modrm(&emitter, 0b11, @intFromEnum(Register.rax), @intFromEnum(Register.rbx));
-    try modrm(&emitter, 0b10, @intFromEnum(Register.rdx), @intFromEnum(Register.rsi));
+    try modrm(&emitter, 0b11, castReg(Register.rax), castReg(Register.rbx));
+    try modrm(&emitter, 0b10, castReg(Register.rdx), castReg(Register.rsi));
 
     try testing.expect(emitter.buffer[0] == 0xC3);
 
@@ -703,9 +707,9 @@ test "sib" {
     var emitter = try em.Emitter.init(allocator, 3);
     defer emitter.deinit();
 
-    try sib(&emitter, 0, 0b100, @intFromEnum(Register.rbx));
-    try sib(&emitter, 0, @intFromEnum(Register.rax), @intFromEnum(Register.rdi));
-    try sib(&emitter, 8, @intFromEnum(Register.rbx), @intFromEnum(Register.rsi));
+    try sib(&emitter, 0, 0b100, castReg(Register.rbx));
+    try sib(&emitter, 0, castReg(Register.rax), castReg(Register.rdi));
+    try sib(&emitter, 8, castReg(Register.rbx), castReg(Register.rsi));
 
     try testing.expect(emitter.buffer[0] == 0x23);
     try testing.expect(emitter.buffer[1] == 0x07);

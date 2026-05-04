@@ -1,4 +1,4 @@
-[NOTE: Since AftonJIT has the big refactoring at zig,it has no updates for now]
+[NOTE: now AftonJIT in refactoring state. Keep in Mind that the information below inactual and now AftonJIT don't works]
 
 
 # Introduction
@@ -94,3 +94,21 @@ Disassembly of section .data:
    6:	c3                   	ret
 
 ```
+
+# Optimization phase
+
+The first version of AftonJIT,have no serious graph-based optimizations like constant propagations via RPO(DFS). But it have two pretty simple DFA-based optimizations:
+- Constant Folding via DFA(DFA made of detect typical constant redudantions and remove them from AftonIR level)
+- Dead Code Elimination via DFA(DFA made of same as CF's DFA made)
+
+So,they're doing on IR level,not binary level as of it was.
+
+The AftonIR have of now one serious bug with stack. To dive into, look to the pseudo-code below:
+```c
+push 111,40
+ldr ARG2,S[0]
+```
+
+So yes, AftonIR allows to compute literals anonimously. That's a feature,but a raw one,because other AftonJIT's versions assume you know count of variables in function you call. But it don't cover that feature of anonimous literal computing. So then the function use more of stack space rather than it allocated at first,then  a serious exploit occured,just because of Stack Overflow.
+
+anyone Who reads it, if you ask "Why I need that info???!" So I answer calmy,I scare you're thought I leave out the project. So, It hears like Justifying,but i really scare you're conside AftonJIT is a "yet another study JIT". NO. I just had no time,but now when i got it fully, i return to the AftonJIT's developing

@@ -82,7 +82,7 @@ pub const FileParser = struct {
     mainModuleNo: usize, //number of module where main
     mainOff: u32, //offset of the main inside the mainModuleNo
 
-    pub fn addFile(allocator: std.mem.Allocator, name: [*]u8, rights: [*]u8) ParseFileError!void {
+    pub fn addFile(self: *FileParser,allocator: std.mem.Allocator, name: [*]u8, rights: File.OpenFlags) ParseFileError!void {
         const file = try std.fs.cwd().openFile(name, rights);
         defer file.close();
 
@@ -90,10 +90,6 @@ pub const FileParser = struct {
             std.debug.print("Cannot open file {s}\n", .{name});
             return error.ErrorOpenFile;
         }
-
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
-        const allocator = gpa.allocator();
 
         var emit = emitter.init(allocator, emitter.standardEmSize);
 
@@ -132,3 +128,17 @@ pub const FileParser = struct {
 //TODO: make tests for all the IndexPoint's functions,test *File ones,make ReadFile,CreateFile,WriteFile function and correspondly the tests. So then you can go to reloc info
 //implementation. So if  compare it with V8's reloc buffer model(that contains relocBuffer from end of the main one,not as a separate structure in memory) it's primitive,but by the time
 //it become a great one. I belive of it.
+
+
+test "addFile" {
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
+        const allocator = gpa.allocator();
+
+        var fileParser = FileParser.init(allocator);
+
+        const rights = "rwb";
+        const name = "lift.afton";
+
+        _ = try fileParser.addFile(allocator,name,rights);
+}

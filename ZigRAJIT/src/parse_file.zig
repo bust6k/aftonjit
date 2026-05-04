@@ -3,6 +3,7 @@ const emitter = @import("emitter.zig");
 
 const ParseFileError = error{
     ErrorOpenFile,
+    ErrorDeleteFile,
 };
 
 pub const relocType = enum(u8) {
@@ -25,6 +26,30 @@ pub const GlobalSymbol = struct {
     symbol: []u8,
 };
 
+
+
+pub const IndexPoint = struct {
+index: usize,
+name: []u8,
+
+pub fn init(allocator: std.mem.allocator,name: []u8) !IndexPoint {
+const name_cpy = try allocator.dupe(u8,name);
+errdefer allocator.free(name_cpy);
+
+return IndexPoint {
+.index = 0,
+.name = name_cpy,
+};
+
+}
+
+pub fn getIndex(self: *IndexPoint,name: []u8) !usize {
+
+}
+
+};
+
+
 pub const Module = struct {
     name: []u8,
     emitter: *emitter.Emitter,
@@ -38,10 +63,11 @@ pub const Module = struct {
         const name_cpy = try allocator.dupe(u8, name);
         errdefer allocator.free(name_cpy);
 
-        return Module{
+        return Module {
             .name = name_cpy,
             .emitter = emitter,
             .symbols = std.StringHashMap(u32).init(allocator),
+            .rc = 0,
             .imports = std.StringHashMap(u32).init(allocator),
             .rinfos = std.ArrayList(RelocInfo).init(allocator),
         };
@@ -50,6 +76,7 @@ pub const Module = struct {
 
 pub const FileParser = struct {
     program: std.ArrayList(Module),
+    indexes: std.ArrayList(IndexPoint),
     modulesCount: usize,
     globalSymbolTable: std.ArrayList(GlobalSymbol),
     mainModuleNo: usize, //number of module where main
@@ -57,7 +84,7 @@ pub const FileParser = struct {
 
     pub fn addFile(allocator: std.mem.Allocator, name: [*]u8, rights: [*]u8) ParseFileError!void {
         const file = try std.fs.cwd().openFile(name, rights);
-        errdefer file.close();
+        defer file.close();
 
         if (file == null) {
             std.debug.print("Cannot open file {s}\n", .{name});
@@ -77,12 +104,23 @@ pub const FileParser = struct {
         if (name == "main.afton") {
             .modulesCount += 1;
             mainModuleNo = .modulesCount;
+            return; // all's ok just return
         }
+        modulesCount += 1;
+        return;
+    }
+
+    pub fn deleteFile(name: [*]u8) !void {
+        var idx = try .program.at(.indexes.getIndex(name));
+        var module = try .program.at(idx);
+        try module.deinit();
+        .modulesCount -= 1;
     }
 
     pub fn init(allocator: std.mem.Allocator) FileParser {
         return FileParser{
             .program = std.ArrayList(Module).init(allocator),
+            .indexes = std.ArrayList(IndexPoint).init(allocator),
             .modulesCount = 0,
             .globalSymbolTable = std.ArrayList(GlobalSymbol).init(allocator),
             .mainModuleNo = 0,
@@ -90,3 +128,7 @@ pub const FileParser = struct {
         };
     }
 };
+
+//TODO: make tests for all the IndexPoint's functions,test *File ones,make ReadFile,CreateFile,WriteFile function and correspondly the tests. So then you can go to reloc info
+//implementation. So if  compare it with V8's reloc buffer model(that contains relocBuffer from end of the main one,not as a separate structure in memory) it's primitive,but by the time
+//it become a great one. I belive of it.

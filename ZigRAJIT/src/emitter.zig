@@ -115,6 +115,22 @@ pub const Emitter = struct {
         }
     }
 
+    pub fn ip(self: *Emitter) usize {
+    return self.ip;
+    }
+
+    pub fn buffer(self: *Emitter) []u8 {
+        return self.buffer;
+    }
+
+    pub fn buffer_size(self: *Emitter) usize { 
+        return self.buffer_size;
+    }
+
+    pub fn owns_buffer(self: *Emitter) bool {
+    return self.owns_buffer;
+    }
+
     pub fn emit(self: *Emitter, byte: u8) !void {
         try self.ensureSpace();
         self.buffer[self.ip] = byte;

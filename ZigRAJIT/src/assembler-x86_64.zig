@@ -59,7 +59,7 @@ fn init() !void {
 /// error ErrorUnsupportedOs occured if AftonJIT not working with current os
 fn getOsName(os: builtin.target.os.tag) ![]u8 {
     switch (os) {
-       .linux => {
+        .linux => {
             return "Linux";
         },
         .macos => {
@@ -115,7 +115,7 @@ pub fn changeMemoryRights(address: [*]u8, length: usize, protection: usize) !voi
 }
 
 fn castReg(reg: Register) u8 {
-return @intFromEnum(reg);
+    return @intFromEnum(reg);
 }
 
 ///instr_add adds two  64-bit numbers or variables and puts calculated value  onto the stack
@@ -245,7 +245,7 @@ pub fn instr_dup(emit: *em.Emitter) !void {
     try rex(emit, 1, 0, 0, 1);
     try pushImm(emit, u64, Register.r8);
 }
-
+//5 bytes + 3 = 8 bytes
 ///fun_prologue emits the standard function prologue for x86_64
 ///
 ///if locals count equals zero,no sub instruction generated
@@ -262,6 +262,19 @@ pub fn fun_prologue(emit: *em.Emitter, loc_count: u8) !void {
         try rex(emit, 1, 0, 0, 0);
         try subImm(emit, u16, Register.rsp, loc_count * 8);
     }
+}
+
+///stub emits the stub byte stub_candidate of N times count
+///returns start position of stub sequence
+pub fn stub(emit: *em.Emitter, stub_candidate: u8, count: u16) !usize {
+    const start_ip: usize = emit.ip;
+    var i: u16 = 0;
+
+    while (i <= count) : (i = i + 1) {
+        try emit.emit(stub_candidate);
+    }
+
+    return start_ip;
 }
 
 pub inline fn fromSpecialToCommonRegister(regNumber: Register) u8 {
@@ -367,6 +380,10 @@ pub fn subImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void
         try emit.emit(0x29);
         try modrm(emit, 0x03, castReg(Register.rcx), dest);
     }
+}
+
+inline fn nop(emit: *em.Emitter) !void {
+    try emit.emit(0x90);
 }
 
 inline fn isExtended(reg: Register) bool {
@@ -662,6 +679,40 @@ test "subImm" {
 
     try testing.expect(res == 118);
     try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3);
+}
+
+test "nop" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var emitter = try em.Emitter.init(allocator, 4);
+    defer emitter.deinit();
+
+    try nop(&emitter);
+    try testing.expect(emitter.buffer[0] == 0x90);
+}
+
+test "stub" {
+    const stub_count = 80;
+    const pos = 2;
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var emitter = try em.Emitter.init(allocator, 4);
+    defer emitter.deinit();
+    emitter.ip = pos;
+
+    const start_i: usize = try stub(&emitter, 0x91, stub_count);
+    var i: usize = emitter.ip;
+
+    while (i <= stub_count) : (i = i + 1) {
+        try testing.expect(emitter.buffer[i] == 0x91);
+    }
+
+    try testing.expect(start_i == pos);
 }
 
 test "rex" {

@@ -2,11 +2,15 @@ const std = @import("std");
 const logger = @import("logger.zig");
 const KB = 1024;
 const testing = std.testing;
+
 const EmitterError = error{
     ErrorExternalBufferTooSmall,
     ErrorMemoryExhausted,
     NoAllocator,
 };
+
+pub const standardEmSize = 4096;
+
 
 pub const Emitter = struct {
     buffer: []u8,
@@ -115,19 +119,19 @@ pub const Emitter = struct {
         }
     }
 
-    pub fn ip(self: *Emitter) usize {
+    pub fn get_ip(self: *Emitter) usize {
     return self.ip;
     }
 
-    pub fn buffer(self: *Emitter) []u8 {
+    pub fn get_buffer(self: *Emitter) []u8 {
         return self.buffer;
     }
 
-    pub fn buffer_size(self: *Emitter) usize { 
+    pub fn get_buffer_size(self: *Emitter) usize { 
         return self.buffer_size;
     }
 
-    pub fn owns_buffer(self: *Emitter) bool {
+    pub fn get_owns_buffer(self: *Emitter) bool {
     return self.owns_buffer;
     }
 

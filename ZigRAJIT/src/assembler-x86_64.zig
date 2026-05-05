@@ -1,11 +1,8 @@
 const std = @import("std");
-const em = @import("emitter.zig");
-const log = @import("logger.zig");
-const retExtensions = @import("enum/opcodes.zig");
+const em = @import("emitter.zig"); 
+const log = @import("logger.zig"); const retExtensions = @import("enum/opcodes.zig");
 const testing = std.testing;
 const builtin = @import("builtin");
-
-const standardEmSize = 256;
 
 const Register = enum(u8) {
     rax = 0,
@@ -51,7 +48,7 @@ fn init() !void {
 
     const allocator = gpa.allocator();
 
-    E = try em.init(allocator, standardEmSize);
+    E = try em.init(allocator, em.standardEmSize);
 }
 
 /// returns the string format of OS name that AftonJIT would to support

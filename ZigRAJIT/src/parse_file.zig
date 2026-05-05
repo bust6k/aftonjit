@@ -1,5 +1,7 @@
 const std = @import("std");
 const emitter = @import("emitter.zig");
+const testing = std.testing;
+const eql = std.mem.eql;
 
 const ParseFileError = error{
     ErrorOpenFile,
@@ -18,7 +20,7 @@ pub const relocType = enum(u8) {
 pub const RelocInfo = struct {
     off: u32,
     symbol: []u8,
-    rtype: RelocType,
+    rtype: relocType,
 };
 
 pub const GlobalSymbol = struct {
@@ -26,51 +28,63 @@ pub const GlobalSymbol = struct {
     symbol: []u8,
 };
 
-
-
 pub const IndexPoint = struct {
-index: usize,
-name: []u8,
+    index: usize,
+    name: []u8,
+    allocator: std.mem.Allocator,
 
-pub fn init(allocator: std.mem.allocator,name: []u8) !IndexPoint {
-const name_cpy = try allocator.dupe(u8,name);
-errdefer allocator.free(name_cpy);
+    pub fn init(allocator: std.mem.Allocator, name: []const u8) !IndexPoint {
+        const name_cpy = try allocator.dupe(u8, name);
+        errdefer allocator.free(name_cpy);
 
-return IndexPoint {
-.index = 0,
-.name = name_cpy,
+        return IndexPoint{
+            .index = 0,
+            .name = name_cpy,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *IndexPoint) void {
+        self.allocator.free(self.name);
+        self.index = 0;
+    }
+
+    pub fn getIndex(self: *IndexPoint) !usize {
+        _ = self;
+        return error.NotImplemented;
+    }
 };
-
-}
-
-pub fn getIndex(self: *IndexPoint,name: []u8) !usize {
-
-}
-
-};
-
 
 pub const Module = struct {
     name: []u8,
-    emitter: *emitter.Emitter,
-    rc: usize, //reading count means what's the current bytes in bytecode  are processed
+    emit: emitter.Emitter,
+    rc: usize,
     symbols: std.StringHashMap(u32),
     imports: std.StringHashMap(u32),
     rinfos: std.ArrayList(RelocInfo),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, name: []u8, emitter: *emitter.Emitter) !Module {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, emit: emitter.Emitter) !Module {
         const name_cpy = try allocator.dupe(u8, name);
         errdefer allocator.free(name_cpy);
 
-        return Module {
+        return Module{
             .name = name_cpy,
-            .emitter = emitter,
+            .emit = emit,
             .symbols = std.StringHashMap(u32).init(allocator),
             .rc = 0,
             .imports = std.StringHashMap(u32).init(allocator),
-            .rinfos = std.ArrayList(RelocInfo).init(allocator),
+            .rinfos = std.ArrayList(RelocInfo){},
+            .allocator = allocator,
         };
+    }
+
+    pub fn deinit(self: *Module) void {
+        self.allocator.free(self.name);
+        self.emit.deinit();
+        self.symbols.deinit();
+        self.imports.deinit();
+        self.rinfos.deinit(self.allocator);
     }
 };
 
@@ -79,66 +93,131 @@ pub const FileParser = struct {
     indexes: std.ArrayList(IndexPoint),
     modulesCount: usize,
     globalSymbolTable: std.ArrayList(GlobalSymbol),
-    mainModuleNo: usize, //number of module where main
-    mainOff: u32, //offset of the main inside the mainModuleNo
+    mainModuleNo: usize,
+    mainOff: u32,
 
-    pub fn addFile(self: *FileParser,allocator: std.mem.Allocator, name: [*]u8, rights: File.OpenFlags) ParseFileError!void {
+    pub fn addFile(self: *FileParser, allocator: std.mem.Allocator, name: []const u8, rights: std.fs.File.OpenFlags) !void {
         const file = try std.fs.cwd().openFile(name, rights);
         defer file.close();
 
-        if (file == null) {
-            std.debug.print("Cannot open file {s}\n", .{name});
-            return error.ErrorOpenFile;
+        const emit = try emitter.Emitter.init(allocator, emitter.standardEmSize);
+
+        const module = try Module.init(allocator, name, emit);
+
+        try self.program.append(allocator,module);
+
+        if (eql(u8, name, "main.afton")) {
+            self.modulesCount += 1;
+            self.mainModuleNo = self.modulesCount;
+            return;
         }
-
-        var emit = emitter.init(allocator, emitter.standardEmSize);
-
-        const module = try Module.init(allocator, name, emitter);
-
-        try .program.append(module);
-
-        if (name == "main.afton") {
-            .modulesCount += 1;
-            mainModuleNo = .modulesCount;
-            return; // all's ok just return
-        }
-        modulesCount += 1;
-        return;
+        self.modulesCount += 1;
     }
 
-    pub fn deleteFile(name: [*]u8) !void {
-        var idx = try .program.at(.indexes.getIndex(name));
-        var module = try .program.at(idx);
-        try module.deinit();
-        .modulesCount -= 1;
+    pub fn deleteFile(self: *FileParser, name: []const u8) !void {
+        for (self.indexes.items, 0..) |*ip, i| {
+            if (eql(u8, ip.name, name)) {
+                const idx = ip.getIndex();
+                if (idx < self.program.items.len) {
+                    var module = &self.program.items[idx];
+                    module.deinit();
+                    _ = self.program.orderedRemove(idx);
+                }
+                _ = self.indexes.orderedRemove(i);
+                self.modulesCount -= 1;
+                return;
+            }
+        }
+        return error.ErrorDeleteFile;
     }
 
-    pub fn init(allocator: std.mem.Allocator) FileParser {
+    pub fn init() FileParser {
         return FileParser{
-            .program = std.ArrayList(Module).init(allocator),
-            .indexes = std.ArrayList(IndexPoint).init(allocator),
+            .program = std.ArrayList(Module){},
+            .indexes = std.ArrayList(IndexPoint){},
             .modulesCount = 0,
-            .globalSymbolTable = std.ArrayList(GlobalSymbol).init(allocator),
+            .globalSymbolTable = std.ArrayList(GlobalSymbol){},
             .mainModuleNo = 0,
             .mainOff = 0,
         };
     }
+
+    pub fn deinit(self: *FileParser,allocator: std.mem.Allocator) void {
+        for (self.program.items) |*module| {
+            module.deinit();
+        }
+        self.program.deinit(allocator);
+
+        for (self.indexes.items) |*ip| {
+            ip.deinit();
+        }
+        self.indexes.deinit(allocator);
+
+        self.globalSymbolTable.deinit(allocator);
+        self.modulesCount = 0;
+        self.mainModuleNo = 0;
+        self.mainOff = 0;
+    }
 };
 
-//TODO: make tests for all the IndexPoint's functions,test *File ones,make ReadFile,CreateFile,WriteFile function and correspondly the tests. So then you can go to reloc info
-//implementation. So if  compare it with V8's reloc buffer model(that contains relocBuffer from end of the main one,not as a separate structure in memory) it's primitive,but by the time
-//it become a great one. I belive of it.
+test "addFile with common file name" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
+    var fileParser = FileParser.init();
+    defer fileParser.deinit(allocator);
 
-test "addFile" {
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const name: []u8 = try allocator.dupe(u8, "test.afton");
+    defer allocator.free(name);
 
-        const allocator = gpa.allocator();
+    const create_rights = std.fs.File.CreateFlags{
+        .read = true,
+    };
+    const open_rights = std.fs.File.OpenFlags{
+        .mode = .read_only,
+    };
 
-        var fileParser = FileParser.init(allocator);
+    _ = try std.fs.cwd().createFile(name, create_rights);
+    defer std.fs.cwd().deleteFile(name) catch {};
 
-        const rights = "rwb";
-        const name = "lift.afton";
+    _ = try fileParser.addFile(allocator, name, open_rights);
 
-        _ = try fileParser.addFile(allocator,name,rights);
+    const module = fileParser.program.items[0];
+
+    try testing.expect(eql(u8, module.name, name));
+    try testing.expect(fileParser.modulesCount == 1);
+    try testing.expect(fileParser.mainModuleNo == 0);
 }
+
+test "addFile with main.afton" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fileParser = FileParser.init();
+    defer fileParser.deinit(allocator);
+    
+    const name: []u8 = try allocator.dupe(u8, "main.afton");
+    defer allocator.free(name);
+
+    const create_rights = std.fs.File.CreateFlags{
+        .read = true,
+    };
+    const open_rights = std.fs.File.OpenFlags{
+        .mode = .read_only,
+    };
+    
+    _ = try std.fs.cwd().createFile(name, create_rights);
+    defer std.fs.cwd().deleteFile(name) catch {};
+
+    _ = try fileParser.addFile(allocator, name, open_rights);
+
+    const module = fileParser.program.items[0];
+
+    try testing.expect(eql(u8, module.name, name));
+    try testing.expect(fileParser.modulesCount == 1);
+    try testing.expect(fileParser.mainModuleNo == 1);
+}
+
+

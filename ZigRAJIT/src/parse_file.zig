@@ -8,6 +8,11 @@ const ParseFileError = error{
     ErrorDeleteFile,
 };
 
+const DigitsError = error{
+    ErrorTooSmall,
+    ErrorBeatenName,
+};
+
 pub const relocType = enum(u8) {
     JMP,
     CALL,
@@ -49,9 +54,51 @@ pub const IndexPoint = struct {
         self.index = 0;
     }
 
+    pub fn detectInvalidUTF8(self: *IndexPoint) bool {
+        var result: usize = 0;
+
+        result = (self.name & 0x80) >> 7;
+        reslut = (!(self.name & 0x80) & ((self.name >> 8) & 0x80)) >> 6;
+        reslut = (!(self.name & 0xC0) & ((self.name >> 8) & 0x80)) >> 5;
+        result = (!(self.name & 0xE0) & ((self.name >> 8) & 0x80)) >> 4;
+        result = (!(self.name & 0xF0) & ((self.name >> 8) & 0x80)) >> 3;
+        //TODO: make other checks for other the bytes
+
+        return ~reslut == 0xFFFFFFFF;
+    }
+
     pub fn getIndex(self: *IndexPoint) !usize {
-        _ = self;
-        return error.NotImplemented;
+        if (idx < 0) {
+            return error.ErrorTooSmall;
+        }
+        return self.index;
+    }
+
+    pub fn createIndex(self: *IndexPoint, idx: usize) !void {
+        if (idx < 0) {
+            return error.ErrorTooSmall;
+        }
+        self.index = idx;
+    }
+
+    pub fn getName(self: *IndexPoint) []u8 {
+        if (eql(self.name, "") || eql(self.name, 0)) {
+            return error.ErrorBeatenName;
+        }
+        if (detectInvalidUTF8(self)) {
+            return self.name;
+        }
+        return error.ErrorBeatenName;
+    }
+
+    pub fn createName(self: *IndexPoint, name: []const u8) !void {
+        if (eql(name, "") || eql(name, 0)) {
+            return error.ErrorBeatenName;
+        }
+        if (detectInvalidUTF8(self)) {
+            self.name = name;
+        }
+        return error.ErrorBeatenName;
     }
 };
 
@@ -104,7 +151,7 @@ pub const FileParser = struct {
 
         const module = try Module.init(allocator, name, emit);
 
-        try self.program.append(allocator,module);
+        try self.program.append(allocator, module);
 
         if (eql(u8, name, "main.afton")) {
             self.modulesCount += 1;
@@ -142,7 +189,7 @@ pub const FileParser = struct {
         };
     }
 
-    pub fn deinit(self: *FileParser,allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *FileParser, allocator: std.mem.Allocator) void {
         for (self.program.items) |*module| {
             module.deinit();
         }
@@ -197,7 +244,7 @@ test "addFile with main.afton" {
 
     var fileParser = FileParser.init();
     defer fileParser.deinit(allocator);
-    
+
     const name: []u8 = try allocator.dupe(u8, "main.afton");
     defer allocator.free(name);
 
@@ -207,7 +254,7 @@ test "addFile with main.afton" {
     const open_rights = std.fs.File.OpenFlags{
         .mode = .read_only,
     };
-    
+
     _ = try std.fs.cwd().createFile(name, create_rights);
     defer std.fs.cwd().deleteFile(name) catch {};
 
@@ -219,5 +266,32 @@ test "addFile with main.afton" {
     try testing.expect(fileParser.modulesCount == 1);
     try testing.expect(fileParser.mainModuleNo == 1);
 }
+test "detectInvalidUTF8" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+}
 
+test "getIndex" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+}
 
+test "createIndex" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+}
+
+test "getName" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+}
+
+test "createName" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+}

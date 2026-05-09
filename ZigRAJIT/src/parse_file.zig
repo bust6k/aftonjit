@@ -55,27 +55,48 @@ pub const IndexPoint = struct {
     }
 
     pub fn detectInvalidUTF8(self: *IndexPoint) bool {
-        var result: usize = 0;
+        //detectInvalidUTF8 is a branchless method that checks  if an IndexPoint name is beaten by several checks
+        //instead of conrol flow instructions, it has to store every check as a bit flag,but uses only 3 bytes at now. Here's the scheme:
+        //[r][r][r][r][r][r][r][r] [u][u][u][u][u][u][u][u] [u][u][u][u][u][u][u][u] [u][u][u][u][u][u][u][u] [u][u][u][u][u][u][u][u]
+        //where:
+        //-r is "reserved"
+        //-u is "used"
+        //variable used to store every check flag is called "Detect Double Word(DDW)"
+        //if no errors detected,all the DDW should be zero. Otherwise,the name is invalid
+        //detectInvalidUTF8 loops on entire name to detect an error everywhere
 
-        result = (self.name & 0x80) >> 7;
-        reslut = (!(self.name & 0x80) & ((self.name >> 8) & 0x80)) >> 6;
-        reslut = (!(self.name & 0xC0) & ((self.name >> 8) & 0x80)) >> 5;
-        result = (!(self.name & 0xE0) & ((self.name >> 8) & 0x80)) >> 4;
-        result = (!(self.name & 0xF0) & ((self.name >> 8) & 0x80)) >> 3;
+        if (self.name.len <= 1) {
+            return false;
+        }
+
+        var result: u32 = 0;
+
+        if ((self.name[0] & 0x80) == 0x01) {
+            result = 1 << 15;
+        } else if (((self.name[0] & 0x80) & (self.name[1] & 0x80)) == 0x01) {
+            result = 1 << 14;
+        } else if (((self.name[0] & 0xC0) & (self.name[1] & 0x80)) == 0x01) {
+            result = 1 << 13;
+        } else if (((self.name[0] & 0xE0) & (self.name[1] & 0x80)) == 0x01) {
+            result = 1 << 12;
+        } else if (((self.name[0] & 0xF0) & (self.name[1] & 0x80)) == 0x01) {
+            result = 1 << 11;
+        }
+
         //TODO: make other checks for other the bytes
 
-        return ~reslut == 0xFFFFFFFF;
+        return ~result == 0xFFFFFFFF;
     }
 
     pub fn getIndex(self: *IndexPoint) !usize {
-        if (idx < 0) {
+        if (self.index < 0) {
             return error.ErrorTooSmall;
         }
         return self.index;
     }
 
     pub fn createIndex(self: *IndexPoint, idx: usize) !void {
-        if (idx < 0) {
+        if (self.index < 0) {
             return error.ErrorTooSmall;
         }
         self.index = idx;
@@ -266,32 +287,28 @@ test "addFile with main.afton" {
     try testing.expect(fileParser.modulesCount == 1);
     try testing.expect(fileParser.mainModuleNo == 1);
 }
-test "detectInvalidUTF8" {
+
+test "test detectInvalidUTF8 with correct name" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    var indexPoint: IndexPoint = try IndexPoint.init(allocator, "correct.afton");
+    defer indexPoint.deinit();
+
+    const isValid: bool = indexPoint.detectInvalidUTF8();
+
+    try testing.expect(isValid == true);
 }
 
-test "getIndex" {
+test "test detectInvalidUTF8 with small name" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-}
+    var indexPoint: IndexPoint = try IndexPoint.init(allocator, "a");
+    defer indexPoint.deinit();
 
-test "createIndex" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-}
+    const isValid: bool = indexPoint.detectInvalidUTF8();
 
-test "getName" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-}
-
-test "createName" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    try testing.expect(isValid == false);
 }

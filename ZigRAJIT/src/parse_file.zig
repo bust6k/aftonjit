@@ -35,7 +35,7 @@ pub const GlobalSymbol = struct {
 
 pub const IndexPoint = struct {
     index: usize,
-    name: []u8,
+    name: []const u8,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !IndexPoint {
@@ -55,44 +55,22 @@ pub const IndexPoint = struct {
     }
 
     pub fn detectInvalidUTF8Str(self: *IndexPoint) bool {
-        if (@inComptime()) {
-            @compileError("attempt to call detectInvalidUTF8 from compile-time context");
-        }
-
-        @setEvalBranchQuota(0);
-
-        //detectInvalidUTF8 is a branchless method that checks  if an IndexPoint name is beaten by several checks
-        //instead of conrol flow instructions, it has to store every check as a bit flag,but uses only 3 bytes at now. Here's the scheme:
-        //[r][r][r][r][r][r][r][r] [u][u][u][u][u][u][u][u] [u][u][u][u][u][u][u][u] [u][u][u][u][u][u][u][u] [u][u][u][u][u][u][u][u]
-        //where:
-        //-r is "reserved"
-        //-u is "used"
-        //variable used to store every check flag is called "Detect Double Word(DDW)"
-        //if no errors detected,all the DDW should be zero. Otherwise,the name is invalid
-        //detectInvalidUTF8 loops on entire name to detect an error everywhere
-
-        if (self.name.len < 1) {
-            return false;
-        }
-
         var result: u32 = 0;
 
-        const first = @as(*const volatile u8, @ptrCast(&self.name[0])).*;
-        const second = @as(*const volatile u8, @ptrCast(&self.name[1])).*;
-        const third = if (self.name.len > 2) @as(*const volatile u8, @ptrCast(&self.name[2])).* else 0;
-        const fourth = if (self.name.len > 3) @as(*const volatile u8, @ptrCast(&self.name[3])).* else 0;
+       const first: u8 = self.name[0];
+       const second: u8 = self.name[1];
+       const third: u8 = self.name[2];
+       const fourth: u8 =  self.name[3];
 
         if ((first & 0xC0) == 0x80) {
             result = 1 << 15;
-        } else if (((first & 0xE0) != 0xC0) || ((second & 0xC0) != 0x80)) {
+        } else if (((first & 0xE0) != 0xC0) | ((second & 0xC0) != 0x80)) {
             result = 1 << 14;
-        } else if (((first & 0xF0) != 0xE0) || ((second & 0xC0) != 0x80) || ((third & 0xC0) != 0x80)) {
+        } else if (((first & 0xF0) != 0xE0) | ((second & 0xC0) != 0x80) | ((third & 0xC0) != 0x80)) {
             result = 1 << 13;
-        } else if (((first & 0xF8) != 0xF0) || ((second & 0xC0) != 0x80) || ((third & 0xC0) != 0x80) || ((fourth & 0xC0) != 0x80)) {
+        } else if (((first & 0xF8) != 0xF0) | ((second & 0xC0) != 0x80) | ((third & 0xC0) != 0x80) | ((fourth & 0xC0) != 0x80)) {
             result = 1 << 12;
         }
-
-        //TODO: make other checks for other the bytes
 
         return ~result == 0xFFFFFFFF;
     }
@@ -302,11 +280,13 @@ test "test detectInvalidUTF8Str with correct name" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var indexPoint: IndexPoint = try IndexPoint.init(allocator, "correct.afton");
+    const name_array = try allocator.dupe(u8, "correct.afton");
+    defer allocator.free(name_array);
+
+    var indexPoint: IndexPoint = try IndexPoint.init(allocator, name_array);
     defer indexPoint.deinit();
 
     const isValid: bool = indexPoint.detectInvalidUTF8Str();
-
     try testing.expect(isValid == true);
 }
 
@@ -315,11 +295,13 @@ test "test detectInvalidUTF8Str with small name" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var indexPoint: IndexPoint = try IndexPoint.init(allocator, "a");
+    const name_array = try allocator.dupe(u8, "a");
+    defer allocator.free(name_array);
+
+    var indexPoint: IndexPoint = try IndexPoint.init(allocator, name_array);
     defer indexPoint.deinit();
 
     const isValid: bool = indexPoint.detectInvalidUTF8Str();
-
     try testing.expect(isValid == false);
 }
 
@@ -328,12 +310,12 @@ test "test detectInvalidUTF8Str with incorrect UTF-8 byte" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const arr = [_]u8{ 0xC0, 0x00 };
+    const arr = try allocator.dupe(u8, &[_]u8{ 0xC0, 0x00 });
+    defer allocator.free(arr);
 
-    var indexPoint: IndexPoint = try IndexPoint.init(allocator, arr[0..]);
+    var indexPoint: IndexPoint = try IndexPoint.init(allocator, arr);
     defer indexPoint.deinit();
 
     const isValid: bool = indexPoint.detectInvalidUTF8Str();
-
     try testing.expect(isValid == false);
 }

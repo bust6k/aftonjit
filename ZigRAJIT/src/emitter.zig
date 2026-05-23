@@ -6,11 +6,11 @@ const testing = std.testing;
 const EmitterError = error{
     ErrorExternalBufferTooSmall,
     ErrorMemoryExhausted,
-    NoAllocator,
+    ErrorNoAllocator,
+    ErrorNumberTooLarge,
 };
 
 pub const standardEmSize = 4096;
-
 
 pub const Emitter = struct {
     buffer: []u8,
@@ -53,7 +53,7 @@ pub const Emitter = struct {
         if (self.allocator) |alloc| {
             return alloc;
         } else {
-            return EmitterError.NoAllocator;
+            return EmitterError.ErrorNoAllocator;
         }
     }
 
@@ -120,19 +120,19 @@ pub const Emitter = struct {
     }
 
     pub fn get_ip(self: *Emitter) usize {
-    return self.ip;
+        return self.ip;
     }
 
     pub fn get_buffer(self: *Emitter) []u8 {
         return self.buffer;
     }
 
-    pub fn get_buffer_size(self: *Emitter) usize { 
+    pub fn get_buffer_size(self: *Emitter) usize {
         return self.buffer_size;
     }
 
     pub fn get_owns_buffer(self: *Emitter) bool {
-    return self.owns_buffer;
+        return self.owns_buffer;
     }
 
     pub fn emit(self: *Emitter, byte: u8) !void {
@@ -178,6 +178,26 @@ pub const Emitter = struct {
     pub fn getCurrByte(self: *Emitter) u8 {
         if (self.ip == 0) return 0;
         return self.buffer[self.ip - 1];
+    }
+
+    pub fn getBytes(self: *Emitter, comptime i: usize, comptime rc: usize) ![]u8 {
+        if ((i > self.ip) | (rc > self.ip)) {
+            return error.ErrorNumberTooLarge;
+        }
+
+        const alloc = try self.getAllocator();
+        var iCpy: usize = i;
+        const rcCpy: usize = rc;
+
+        var res: []u8 = try alloc.alloc(u8, rcCpy);
+
+        errdefer alloc.free(res);
+
+        while (iCpy < rcCpy) : (iCpy += 1) {
+            res[iCpy] = self.buffer[iCpy];
+        }
+
+        return res;
     }
 };
 
@@ -277,4 +297,28 @@ test "Testing getCurrByte" {
     try emitter.emit(0x0F);
     try emitter.emit(0xAA);
     try testing.expect(emitter.getCurrByte() == 0xAA);
+}
+
+test "Testing getBytes" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var emitter = try Emitter.init(allocator, 2);
+    defer emitter.deinit();
+
+    try emitter.emit(0xAA);
+    try emitter.emit(0x90);
+    try emitter.emit(0xC0);
+    try emitter.emitWord(0xDDC0);
+    
+    const result: []u8 = try emitter.getBytes(0, 5);
+    const alloc = try emitter.getAllocator();
+    defer alloc.free(result);
+
+    try testing.expect(result[0] == 0xAA);
+    try testing.expect(result[1] == 0x90);
+    try testing.expect(result[2] == 0xC0);
+    try testing.expect(result[3] == 0xC0);
+    try testing.expect(result[4] == 0xDD);
 }

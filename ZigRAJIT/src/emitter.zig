@@ -10,7 +10,7 @@ const EmitterError = error{
     ErrorNumberTooLarge,
 };
 
-pub const standardEmSize = 4096;
+pub const standardEmSize = KB * 4;
 
 pub const Emitter = struct {
     buffer: []u8,
@@ -180,7 +180,7 @@ pub const Emitter = struct {
         return self.buffer[self.ip - 1];
     }
 
-    pub fn getBytes(self: *Emitter, comptime i: usize, comptime rc: usize) ![]u8 {
+    pub fn getBytes(self: *Emitter, i: usize, rc: usize) ![]u8 {
         if ((i > self.ip) | (rc > self.ip)) {
             return error.ErrorNumberTooLarge;
         }
@@ -311,8 +311,8 @@ test "Testing getBytes" {
     try emitter.emit(0x90);
     try emitter.emit(0xC0);
     try emitter.emitWord(0xDDC0);
-    
-    const result: []u8 = try emitter.getBytes(0, 5);
+
+    var result: []u8 = try emitter.getBytes(0, 5);
     const alloc = try emitter.getAllocator();
     defer alloc.free(result);
 
@@ -321,4 +321,11 @@ test "Testing getBytes" {
     try testing.expect(result[2] == 0xC0);
     try testing.expect(result[3] == 0xC0);
     try testing.expect(result[4] == 0xDD);
+
+    result = emitter.getBytes(0, 5000) catch {
+        try testing.expect(true);
+        return;
+    };
+
+    try testing.expect(false);
 }

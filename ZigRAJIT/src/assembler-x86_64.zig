@@ -1,6 +1,7 @@
 const std = @import("std");
 const em = @import("emitter.zig"); 
-const log = @import("logger.zig"); const retExtensions = @import("enum/opcodes.zig");
+const log = @import("logger.zig");
+const retExtensions = @import("enum/opcodes.zig");
 const testing = std.testing;
 const builtin = @import("builtin");
 

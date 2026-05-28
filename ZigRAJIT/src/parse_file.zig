@@ -19,9 +19,13 @@ pub const relocType = enum(u8) {
     JMP,
     CALL,
     CALL_EXTERNAL,
-    DATA_ABS,
-    DATA_REL,
+    ADDR_ABS,
+    ADDR_REL,
     EMBEDDED_OBJECT,
+    DATA_I64,
+    //it means the relocation point doesn't need a stub and complete itself.
+    //Reloc iterators don't iterate over these
+    DATA_COMPLETE,
 
     //Types in a far future
 
@@ -42,13 +46,29 @@ pub const relocType = enum(u8) {
 
 pub const RelocInfo = struct {
     off: u32,
+    off_src: u32,
+    //if type is DATA_ABS,the first index is the len of instruction opcode. For example if mov rax,0x00  stores 2 bytes as an opcode(REX.W + opcode) so then len is 2. It's need
+    //for relocation pathing
     symbol: []u8,
-    rtype: relocType,
-};
+    rType: relocType,
+    allocator: std.mem.Allocator,
 
-pub const GlobalSymbolEntry = struct {
-    off: u32,
-    symbol: []u8,
+    pub fn init(allocator: std.mem.Allocator, off: u32, off_src: u32, sym: []u8, rtp: relocType) !RelocInfo {
+        const sym_cpy = try allocator.dupe(u8, sym);
+        errdefer allocator.free(sym_cpy);
+
+        return RelocInfo{
+            .off = off,
+            .off_src = off_src,
+            .symbol = sym_cpy,
+            .rType = rtp,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *RelocInfo) void {
+        self.allocator.free(self.symbol);
+    }
 };
 
 pub const Module = struct {
@@ -57,7 +77,7 @@ pub const Module = struct {
     rc: usize,
     symbols: std.StringHashMap(u32),
     imports: std.StringHashMap(u32),
-    rinfos: std.ArrayList(RelocInfo),
+    rinfos: std.AutoHashMap(u32, RelocInfo),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, emit: emitter.Emitter) !Module {
@@ -70,7 +90,7 @@ pub const Module = struct {
             .symbols = std.StringHashMap(u32).init(allocator),
             .rc = 0,
             .imports = std.StringHashMap(u32).init(allocator),
-            .rinfos = std.ArrayList(RelocInfo){},
+            .rinfos = std.AutoHashMap(u32, RelocInfo).init(allocator),
             .allocator = allocator,
         };
     }
@@ -80,14 +100,80 @@ pub const Module = struct {
         self.emit.deinit();
         self.symbols.deinit();
         self.imports.deinit();
-        self.rinfos.deinit(self.allocator);
+
+        var it = self.rinfos.valueIterator();
+
+        while (it.next()) |reloc| {
+            reloc.deinit();
+        }
+
+        self.rinfos.deinit();
+    }
+
+    pub fn relocWrite(self: *Module, arr_idx_con: u32, rtp: relocType, arr_idx_creat: u32, data: ?[]u8) !void {
+        if (data) |d| {
+            var rel: relocType = rtp;
+            if ((rtp != relocType.DATA_I64) | (rtp != relocType.DATA_COMPLETE) | (rtp != relocType.ADDR_ABS)) rel = relocType.DATA_COMPLETE;
+
+            const reloc = try RelocInfo.init(self.allocator, arr_idx_con, arr_idx_creat, d, rel);
+            try self.rinfos.put(arr_idx_con, reloc);
+            return;
+        } else {
+            var slice: [2]u8 = .{ 0x00, 0x00 };
+            const stub = slice[0..];
+
+            const reloc = try RelocInfo.init(self.allocator, arr_idx_con, arr_idx_creat, stub, rtp);
+            try self.rinfos.put(arr_idx_con, reloc);
+            return;
+        }
+    }
+
+    fn isDataReloc(rel: *RelocInfo) bool {
+        return (rel.rType == relocType.DATA_COMPLETE) || (rel.rType == relocType.DATA_I64) || (rel.rType == relocType.EMBEDDED_OBJECT);
+    }
+
+    fn calculate32Relative(self: *Module, rel: *RelocInfo) u32 {
+        const from: u64 = self.emit.buffer + rel.off;
+        const next_inst: u64 = from + 5;
+        const target: u32 = (self.emit.buffer + rel.off_src) - next_inst;
+
+        return target;
+    }
+
+    fn calculate64Absolute(self: *Module, rel: *RelocInfo) u64 {
+        return self.emit.buffer + rel.off_src;
+    }
+
+    pub fn relocIter(self: *Module) !void {
+        var it = self.rinfos.valueIterator();
+
+        while (it.next()) |reloc| {
+            if (!isDataReloc(reloc)) {
+                if (reloc.rType == relocType.ADDR_REL) {
+                    const rel32: u32 = calculate32Relative(self, reloc);
+                    const old_ip = self.emit.ip;
+                    const new_ip = self.emit.buffer + reloc.off + 1;
+
+                    self.emit.ip = new_ip;
+
+                    try self.emit.emitDWord(rel32);
+
+                    self.emit.ip = old_ip;
+                } else if (reloc.rType == relocType.ADDR_ABS) {
+                    const old_ip = self.emit.ip;
+                    const new_ip = self.emit.buffer + reloc.off + reloc.symbol[0];
+                    self.emit.ip = new_ip;
+                    try self.emit.emitQuad(calculate64Absolute(self, reloc));
+                    self.emit.ip = old_ip;
+                }
+            }
+        }
     }
 };
 
 pub const FileParser = struct {
     program: std.StringHashMap(Module),
     modulesCount: usize,
-    globalOffsetTable: std.StringHashMap(GlobalSymbolEntry),
     mainModuleNo: usize,
     mainOff: u32,
 
@@ -169,7 +255,7 @@ pub const FileParser = struct {
     }
 
     pub fn init(allocator: std.mem.Allocator) FileParser {
-        return FileParser{ .program = std.StringHashMap(Module).init(allocator), .modulesCount = 0, .globalOffsetTable = std.StringHashMap(GlobalSymbolEntry).init(allocator), .mainModuleNo = 0, .mainOff = 0 };
+        return FileParser{ .program = std.StringHashMap(Module).init(allocator), .modulesCount = 0, .mainModuleNo = 0, .mainOff = 0 };
     }
 
     pub fn deinit(self: *FileParser) void {
@@ -180,7 +266,6 @@ pub const FileParser = struct {
         }
         self.program.deinit();
 
-        self.globalOffsetTable.deinit();
         self.modulesCount = 0;
         self.mainModuleNo = 0;
         self.mainOff = 0;
@@ -432,4 +517,100 @@ test "test readFile with too small arguments" {
     defer allocator.free(res);
 
     try testing.expect(res[0] == 0xDA);
+}
+
+test "test relocWrite without data" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const name: []u8 = try allocator.dupe(u8, "reloc_simple.afton");
+    defer allocator.free(name);
+
+    const em = try emitter.Emitter.init(allocator, 2);
+
+    var module = try Module.init(allocator, name, em);
+    defer module.deinit();
+
+    const consumer_idx: u32 = 0;
+    const creator_idx: u32 = 5;
+    const rtp: relocType = relocType.ADDR_REL;
+
+    _ = try module.relocWrite(consumer_idx, rtp, creator_idx, null);
+
+    try testing.expect(module.rinfos.count() == 1);
+
+    var it = module.rinfos.valueIterator();
+
+    while (it.next()) |entry| {
+        try testing.expect(entry.off == consumer_idx);
+        try testing.expect(entry.off_src == creator_idx);
+        try testing.expect(entry.rType == rtp);
+    }
+}
+
+test "test relocWrite with correct relocType data" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const name: []u8 = try allocator.dupe(u8, "reloc_correct_reloc.afton");
+    defer allocator.free(name);
+
+    const em = try emitter.Emitter.init(allocator, 2);
+
+    var module = try Module.init(allocator, name, em);
+    defer module.deinit();
+
+    const consumer_idx: u32 = 1;
+    const creator_idx: u32 = 9;
+    const rtp: relocType = relocType.DATA_COMPLETE;
+
+    const data: []u8 = try allocator.dupe(u8, "some_data.com");
+    defer allocator.free(data);
+
+    _ = try module.relocWrite(consumer_idx, rtp, creator_idx, data);
+    try testing.expect(module.rinfos.count() == 1);
+
+    var it = module.rinfos.valueIterator();
+
+    while (it.next()) |entry| {
+        try testing.expect(entry.off == consumer_idx);
+        try testing.expect(entry.off_src == creator_idx);
+        try testing.expect(entry.rType == rtp);
+        try testing.expect(eql(u8, entry.symbol, data));
+    }
+}
+
+test "test relocWrite with incorrect relocType data" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const name: []u8 = try allocator.dupe(u8, "reloc_incorrect_reloc.afton");
+    defer allocator.free(name);
+
+    const em = try emitter.Emitter.init(allocator, 2);
+
+    var module = try Module.init(allocator, name, em);
+    defer module.deinit();
+
+    const consumer_idx: u32 = 1;
+    const creator_idx: u32 = 9;
+    const rtp: relocType = relocType.JMP;
+
+    const data: []u8 = try allocator.dupe(u8, "some_incorrect.org");
+    defer allocator.free(data);
+
+    _ = try module.relocWrite(consumer_idx, rtp, creator_idx, data);
+    try testing.expect(module.rinfos.count() == 1);
+
+    var it = module.rinfos.valueIterator();
+
+    while (it.next()) |entry| {
+        try testing.expect(entry.off == consumer_idx);
+        try testing.expect(entry.off_src == creator_idx);
+        try testing.expect(entry.rType == relocType.DATA_COMPLETE);
+        try testing.expect(eql(u8, entry.symbol, data));
+    }
 }

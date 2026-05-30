@@ -1,5 +1,7 @@
 const std = @import("std");
 const emitter = @import("emitter.zig");
+const asmx64 = @import("assembler-x86_64.zig");
+
 const testing = std.testing;
 const eql = std.mem.eql;
 
@@ -45,15 +47,15 @@ pub const relocType = enum(u8) {
 };
 
 pub const RelocInfo = struct {
-    off: u32,
-    off_src: u32,
+    off: usize,
+    off_src: usize,
     //if type is DATA_ABS,the first index is the len of instruction opcode. For example if mov rax,0x00  stores 2 bytes as an opcode(REX.W + opcode) so then len is 2. It's need
     //for relocation pathing
     symbol: []u8,
     rType: relocType,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, off: u32, off_src: u32, sym: []u8, rtp: relocType) !RelocInfo {
+    pub fn init(allocator: std.mem.Allocator, off: usize, off_src: usize, sym: []u8, rtp: relocType) !RelocInfo {
         const sym_cpy = try allocator.dupe(u8, sym);
         errdefer allocator.free(sym_cpy);
 
@@ -71,13 +73,36 @@ pub const RelocInfo = struct {
     }
 };
 
+//helper structure for testing purposes
+pub const RelocArr = struct {
+    rel_addr_arr: std.ArrayList(u32),
+    addr_arr: std.ArrayList(u64),
+
+    pub fn init(rel_addr: ?std.ArrayList(u32), addr: ?std.ArrayList(u64)) RelocArr {
+        var rel_addr_clean: std.ArrayList(u32) = .empty;
+        var addr_clean: std.ArrayList(u64) = .empty;
+
+        if (rel_addr) |rel| {
+            rel_addr_clean = rel;
+        }
+        if (addr) |abs| {
+            addr_clean = abs;
+        }
+
+        return RelocArr{
+            .rel_addr_arr = rel_addr_clean,
+            .addr_arr = addr_clean,
+        };
+    }
+};
+
 pub const Module = struct {
     name: []u8,
     emit: emitter.Emitter,
     rc: usize,
     symbols: std.StringHashMap(u32),
     imports: std.StringHashMap(u32),
-    rinfos: std.AutoHashMap(u32, RelocInfo),
+    rinfos: std.AutoHashMap(usize, RelocInfo),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, emit: emitter.Emitter) !Module {
@@ -90,7 +115,7 @@ pub const Module = struct {
             .symbols = std.StringHashMap(u32).init(allocator),
             .rc = 0,
             .imports = std.StringHashMap(u32).init(allocator),
-            .rinfos = std.AutoHashMap(u32, RelocInfo).init(allocator),
+            .rinfos = std.AutoHashMap(usize, RelocInfo).init(allocator),
             .allocator = allocator,
         };
     }
@@ -110,7 +135,7 @@ pub const Module = struct {
         self.rinfos.deinit();
     }
 
-    pub fn relocWrite(self: *Module, arr_idx_con: u32, rtp: relocType, arr_idx_creat: u32, data: ?[]u8) !void {
+    pub fn relocWrite(self: *Module, arr_idx_con: usize, rtp: relocType, arr_idx_creat: usize, data: ?[]u8) !void {
         if (data) |d| {
             var rel: relocType = rtp;
             if ((rtp != relocType.DATA_I64) | (rtp != relocType.DATA_COMPLETE) | (rtp != relocType.ADDR_ABS)) rel = relocType.DATA_COMPLETE;
@@ -129,22 +154,25 @@ pub const Module = struct {
     }
 
     fn isDataReloc(rel: *RelocInfo) bool {
-        return (rel.rType == relocType.DATA_COMPLETE) || (rel.rType == relocType.DATA_I64) || (rel.rType == relocType.EMBEDDED_OBJECT);
+        return (rel.rType == relocType.DATA_COMPLETE) | (rel.rType == relocType.DATA_I64) | (rel.rType == relocType.EMBEDDED_OBJECT);
     }
 
     fn calculate32Relative(self: *Module, rel: *RelocInfo) u32 {
-        const from: u64 = self.emit.buffer + rel.off;
+        const from: u64 = self.emit.buffer[rel.off];
         const next_inst: u64 = from + 5;
-        const target: u32 = (self.emit.buffer + rel.off_src) - next_inst;
+        const target: u32 = @truncate(self.emit.buffer[rel.off_src] - next_inst);
 
         return target;
     }
 
     fn calculate64Absolute(self: *Module, rel: *RelocInfo) u64 {
-        return self.emit.buffer + rel.off_src;
+        return self.emit.buffer[rel.off_src];
     }
 
-    pub fn relocIter(self: *Module) !void {
+    pub fn relocIter(self: *Module) !RelocArr {
+        var rel_list: std.ArrayList(u32) = .empty;
+        var abs_list: std.ArrayList(u64) = .empty;
+
         var it = self.rinfos.valueIterator();
 
         while (it.next()) |reloc| {
@@ -152,22 +180,32 @@ pub const Module = struct {
                 if (reloc.rType == relocType.ADDR_REL) {
                     const rel32: u32 = calculate32Relative(self, reloc);
                     const old_ip = self.emit.ip;
-                    const new_ip = self.emit.buffer + reloc.off + 1;
+                    const new_ip = self.emit.buffer[reloc.off + 1];
 
                     self.emit.ip = new_ip;
 
                     try self.emit.emitDWord(rel32);
+                    try rel_list.append(self.allocator, rel32);
+                    errdefer rel_list.deinit(self.allocator);
 
                     self.emit.ip = old_ip;
                 } else if (reloc.rType == relocType.ADDR_ABS) {
+                    const abs = calculate64Absolute(self, reloc);
+
                     const old_ip = self.emit.ip;
-                    const new_ip = self.emit.buffer + reloc.off + reloc.symbol[0];
+                    const new_ip = self.emit.buffer[reloc.off + reloc.symbol[0]];
                     self.emit.ip = new_ip;
-                    try self.emit.emitQuad(calculate64Absolute(self, reloc));
+
+                    try self.emit.emitQuad(abs);
                     self.emit.ip = old_ip;
+                    try abs_list.append(self.allocator, abs);
+                    errdefer abs_list.deinit(self.allocator);
                 }
             }
         }
+        const arr = RelocArr.init(rel_list, abs_list);
+
+        return arr;
     }
 };
 
@@ -612,5 +650,68 @@ test "test relocWrite with incorrect relocType data" {
         try testing.expect(entry.off_src == creator_idx);
         try testing.expect(entry.rType == relocType.DATA_COMPLETE);
         try testing.expect(eql(u8, entry.symbol, data));
+    }
+}
+
+test "test relocIter at correct no-data relocation points" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const name: []u8 = try allocator.dupe(u8, "reloc_iter_no-data.afton");
+    defer allocator.free(name);
+
+    //addr_arr is an array contains absolute addresses for instructions in Emitter
+    var addr_arr: std.ArrayList(u64) = .empty;
+    //rel_addr_arr is an array contains relative addresses for instructions in Emitter
+    var rel_addr_arr: std.ArrayList(u32) = .empty;
+
+    const rtp_frst = relocType.ADDR_REL;
+    const rtp_scnd = relocType.ADDR_ABS;
+    var len_slice: [1]u8 = .{0x01};
+    const stub = len_slice[0..];
+
+    var em = try emitter.Emitter.init(allocator, 2);
+
+    var module = try Module.init(allocator, name, em);
+    defer module.deinit();
+
+    try em.emit(0x90);
+    //absolute relative jmp
+    try em.emit(0xE9);
+    //in a real code creator index gets by index map and call table(or Direct-Relocation-Call(DRC) is used) but there's simplified
+    _ = try module.relocWrite(em.ip, rtp_frst, em.ip - 1, null);
+
+    try em.emitDWord(0x00000000);
+
+    //move 8 byte to rax
+    try asmx64.rex(&em, 1, 0, 0, 0);
+    try em.emit(0xB8); //mov to RAX
+
+    _ = try module.relocWrite(em.ip, rtp_scnd, em.ip - 8, stub);
+
+    try em.emitQuad(0x0000000000000000);
+    //absolute far call
+    try em.emit(0xFF);
+    try em.emit(0xD0); //register RAX
+
+    var it = module.rinfos.valueIterator();
+
+    while (it.next()) |entry| {
+        if (entry.rType == relocType.ADDR_REL) {
+            try rel_addr_arr.append(allocator, module.calculate32Relative(entry));
+        } else if (entry.rType == relocType.ADDR_ABS) {
+            try addr_arr.append(allocator, module.calculate64Absolute(entry));
+        }
+    }
+
+    const real_results = try module.relocIter();
+
+    for (rel_addr_arr.items, 0..) |val, i| {
+        try testing.expect(val == real_results.rel_addr_arr.items[i]);
+    }
+
+    for (addr_arr.items, 0..) |val, i| {
+        try testing.expect(val == real_results.addr_arr.items[i]);
     }
 }

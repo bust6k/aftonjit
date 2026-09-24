@@ -18,7 +18,7 @@ const DigitsError = error{
 };
 
 pub const relocType = enum(u8) {
-    //Types I should implement at first
+    //Types I should implement at first,
     JMP,
     CALL,
     CALL_EXTERNAL,

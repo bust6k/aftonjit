@@ -158,7 +158,7 @@ pub const Emitter = struct {
         try self.emit(@truncate(dword >> 16));
         try self.emit(@truncate(dword >> 24));
     }
-
+   
     pub fn emitQuad(self: *Emitter, quad: u64) !void {
         try self.emit(@truncate(quad));
         try self.emit(@truncate(quad >> 8));
@@ -198,6 +198,26 @@ pub const Emitter = struct {
         }
 
         return res;
+    }
+    pub fn dump_code(self: *Emitter) !void {
+        var buf: [2048]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        const allocator = fba.allocator();
+
+        var list = std.ArrayList(u8){};
+        
+        try list.append(allocator,'{');
+
+        for (self.buffer, 0..) |byte, i| {
+            if (i % 16 == 0 and i > 0) {
+                try list.append(allocator,'\n');
+            }
+            try list.writer(allocator).print("{x:0>2}, ", .{byte});
+        }
+
+        try list.append(allocator,'}');
+
+        std.debug.print("{s}\n", .{list.items});
     }
 };
 

@@ -108,20 +108,24 @@ pub const RelocArr = struct {
 
 pub const Module = struct {
     name: []u8,
+    //emit - is an .afton buffer,which contains source code of .afton program
     emit: emitter.Emitter,
+    //machcode - is a buffer consisting of generated machine code to that .afton program file
+    machcode: emitter.Emitter,
     rc: usize,
     symbols: std.StringHashMap(u32),
     imports: std.StringHashMap(u32),
     rinfos: std.AutoHashMap(usize, RelocInfo),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, emit: emitter.Emitter) !Module {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, emit: emitter.Emitter,machcode: emitter.Emitter) !Module {
         const name_cpy = try allocator.dupe(u8, name);
         errdefer allocator.free(name_cpy);
 
         return Module{
             .name = name_cpy,
             .emit = emit,
+            .machcode = machcode,
             .symbols = std.StringHashMap(u32).init(allocator),
             .rc = 0,
             .imports = std.StringHashMap(u32).init(allocator),
@@ -133,6 +137,7 @@ pub const Module = struct {
     pub fn deinit(self: *Module) void {
         self.allocator.free(self.name);
         self.emit.deinit();
+        self.machcode.deinit();
         self.symbols.deinit();
         self.imports.deinit();
 
@@ -172,10 +177,7 @@ pub const Module = struct {
 
         const consumer_addr: i64 = @intCast(base + rel.off);
         const next_inst: i64 = consumer_addr + 5;
-        prt("consumer_next_inst: {x}\n", .{next_inst});
         const creator_addr: i64 = @intCast(base + rel.off_src);
-        prt("creator_addr: {x}\n", .{creator_addr});
-        prt("substraction of them: {x}\n", .{creator_addr - next_inst});
         const rel32: i64 = creator_addr - next_inst; 
         return @intCast(rel32);
     }
@@ -223,6 +225,7 @@ pub const Module = struct {
 
 pub const FileParser = struct {
     program: std.StringHashMap(Module),
+    cur_file: []u8,
     modulesCount: usize,
     mainModuleNo: usize,
     mainOff: u32,
@@ -266,8 +269,11 @@ pub const FileParser = struct {
         defer file.close();
 
         const emit = try emitter.Emitter.init(allocator, emitter.standardEmSize);
+                 
+        const machcode = try emitter.Emitter.init(allocator, emitter.standardEmSize  * 2);
 
-        const module = try Module.init(allocator, name, emit);
+ 
+        const module = try Module.init(allocator, name, emit,machcode);
 
         try self.program.put(name, module);
 
@@ -277,9 +283,10 @@ pub const FileParser = struct {
             return;
         }
         self.modulesCount += 1;
+        self.cur_file = name;
     }
 
-    pub fn readFile(self: *FileParser, name: []const u8, i: usize, rc: usize) ![]const u8 {
+    pub fn readModule(self: *FileParser, name: []const u8, i: usize, rc: usize) ![]const u8 {
         var rcCpy: usize = rc;
 
         if ((rcCpy == 0)) {
@@ -293,6 +300,39 @@ pub const FileParser = struct {
         }
         return error.FileNotFound;
     }
+ pub fn readModule(self: *FileParser, name: []const u8, i: usize, rc: usize) ![]const u8 {
+        var rcCpy: usize = rc;
+
+        if ((rcCpy == 0)) {
+            rcCpy = 1;
+        }
+
+        if (self.program.getPtr(name)) |module| {
+            return try module.machcode.getBytes(i, rcCpy);
+        } else {
+            return error.FileNotFound;
+        }
+        return error.FileNotFound;
+    }
+
+
+    pub fn writeFile(self: *FileParser, name: []const u8) !void {
+        if (self.program.getPtr(name)) |module| {
+            var file = std.fs.cwd().openFile(name, .{ .mode = .read_only }) catch {
+                return error.FileNotFound;
+            };
+            defer file.close();
+
+            var buf: [1]u8 = undefined;
+            while (true) {
+                const n = try file.read(&buf);
+                if (n == 0) break;
+                try module.emit.emit(buf[0]);
+            }
+        } else {
+            return error.FileNotFound;
+        }
+    }
 
     pub fn deleteFile(self: *FileParser, name: []const u8) !void {
         if (self.program.getPtr(name)) |module| {
@@ -305,7 +345,7 @@ pub const FileParser = struct {
     }
 
     pub fn init(allocator: std.mem.Allocator) FileParser {
-        return FileParser{ .program = std.StringHashMap(Module).init(allocator), .modulesCount = 0, .mainModuleNo = 0, .mainOff = 0 };
+        return FileParser{ .program = std.StringHashMap(Module).init(allocator) , .cur_file = allocator.alloc(u8,256), .modulesCount = 0, .mainModuleNo = 0, .mainOff = 0 };
     }
 
     pub fn deinit(self: *FileParser) void {
@@ -315,7 +355,8 @@ pub const FileParser = struct {
             module.deinit();
         }
         self.program.deinit();
-
+        self.allocator.free(self.cur_file);
+        
         self.modulesCount = 0;
         self.mainModuleNo = 0;
         self.mainOff = 0;
@@ -466,7 +507,7 @@ test "test detectInvalidUTF8Str with incorrect UTF-8 byte" {
     try testing.expect(isValid == true);
 }
 
-test "test readFile with correct file" {
+test "test readModule with correct file" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -498,7 +539,7 @@ test "test readFile with correct file" {
         try testing.expect(false);
     }
 
-    const res: []const u8 = try fileParser.readFile(name, 0, 4);
+    const res: []const u8 = try fileParser.readModule(name, 0, 4);
 
     defer allocator.free(res);
 
@@ -508,7 +549,7 @@ test "test readFile with correct file" {
     try testing.expect(res[3] == 0xCA);
 }
 
-test "test readFile with non-existing file" {
+test "test readModule with non-existing file" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -523,7 +564,7 @@ test "test readFile with non-existing file" {
         module.deinit();
         try testing.expect(false);
     } else {
-        _ = fileParser.readFile(name, 0, 2) catch {
+        _ = fileParser.readModule(name, 0, 2) catch {
             try testing.expect(true);
             return;
         };
@@ -532,7 +573,7 @@ test "test readFile with non-existing file" {
     }
 }
 
-test "test readFile with too small arguments" {
+test "test readModule with too small arguments" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -562,7 +603,7 @@ test "test readFile with too small arguments" {
         try testing.expect(false);
     }
 
-    const res: []const u8 = try fileParser.readFile(name, 0, 0);
+    const res: []const u8 = try fileParser.readModule(name, 0, 0);
 
     defer allocator.free(res);
 
@@ -578,8 +619,10 @@ test "test relocWrite without data" {
     defer allocator.free(name);
 
     const em = try emitter.Emitter.init(allocator, 2);
+    const mc = try emitter.Emitter.init(allocator, 2);
 
-    var module = try Module.init(allocator, name, em);
+
+    var module = try Module.init(allocator, name, em,mc);
     defer module.deinit();
 
     const consumer_idx: u32 = 0;
@@ -608,8 +651,10 @@ test "test relocWrite with correct relocType data" {
     defer allocator.free(name);
 
     const em = try emitter.Emitter.init(allocator, 2);
+    const mc = try emitter.Emitter.init(allocator, 2);
 
-    var module = try Module.init(allocator, name, em);
+
+    var module = try Module.init(allocator, name, em,mc);
     defer module.deinit();
 
     const consumer_idx: u32 = 1;
@@ -641,8 +686,10 @@ test "test relocWrite with incorrect relocType data" {
     defer allocator.free(name);
 
     const em = try emitter.Emitter.init(allocator, 2);
+    const mc = try emitter.Emitter.init(allocator, 2);
 
-    var module = try Module.init(allocator, name, em);
+
+    var module = try Module.init(allocator, name, em,mc);
     defer module.deinit();
 
     const consumer_idx: u32 = 1;
@@ -689,8 +736,10 @@ test "test relocIter at correct no-data relocation points" {
     //const stub = len_slice[0..];
 
     var em = try emitter.Emitter.init(allocator, 21);
+    const mc = try emitter.Emitter.init(allocator, 21);
 
-    var module = try Module.init(allocator, name, em);
+
+    var module = try Module.init(allocator, name, em,mc);
     defer module.deinit();
 
     try em.emit(0x90);
@@ -713,8 +762,38 @@ test "test relocIter at correct no-data relocation points" {
     try em.emit(0xD0); //register RAX
     var arr : RelocArr = try module.relocIter();
     defer arr.deinit();
-    prt("The final code result:\n", .{});
+    prt("Relocation test result:\n", .{});
     try em.dump_code();
 
-    // var it = module.rinfos.valueIterator();
+    
+}
+
+
+test "writeFile loads disk bytes" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    var fp = FileParser.init(allocator);
+    defer fp.deinit();
+    const name = "tmp_writefile_check.afton";
+    defer std.fs.cwd().deleteFile(name) catch {};
+    {
+        var f = try std.fs.cwd().createFile(name, .{ .read = true });
+        try f.writeAll(&[_]u8{ 0x41, 0x42, 0x43 });
+        f.close();
+    }
+    try fp.addFile(allocator, name, .{ .mode = .read_only });
+    try fp.writeFile(name);
+    const res = try fp.readModule(name, 0, 3);
+    defer allocator.free(res);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x41, 0x42, 0x43 }, res);
+}
+
+test "writeFile missing module fails" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    var fp = FileParser.init(allocator);
+    defer fp.deinit();
+    try std.testing.expectError(error.FileNotFound, fp.writeFile("nope.afton"));
 }

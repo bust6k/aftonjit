@@ -2,6 +2,8 @@ const std = @import("std");
 const em = @import("emitter.zig"); 
 const log = @import("logger.zig");
 const retExtensions = @import("enum/opcodes.zig");
+const opcodes = @import("enum/opcodes.zig");
+const pf = @import("parse_file.zig");
 const testing = std.testing;
 const builtin = @import("builtin");
 
@@ -260,6 +262,19 @@ pub fn fun_prologue(emit: *em.Emitter, loc_count: u8) !void {
         try rex(emit, 1, 0, 0, 0);
         try subImm(emit, u16, Register.rsp, loc_count * 8);
     }
+}
+pub fn gen_func_body(parser: *pf.FileParser) void {
+var sym : [1]u8 = {0};
+
+if (parser.program.getPtr(parser.cur_file)) |module| {
+sym = parser.readModule(parser.cur_name,module.emit.ip,1)
+while(sym != opcodes.Opcodes.end) : (true) {
+const r = code_gen_inst(sym);
+if(r == opcodes.Opcodes.End_prg){
+break;
+}
+}
+}
 }
 
 ///stub emits the stub byte stub_candidate of N times count

@@ -243,7 +243,7 @@ pub fn instr_dup(emit: *em.Emitter) !void {
     try rex(emit, 0, 1, 0, 1);
     try movMemValToReg(emit, Register.r8, Register.rsp);
     try rex(emit, 1, 0, 0, 1);
-    try pushImm(emit, u64, Register.r8);
+    try pushImm(emit, u64, @intFromEnum(Register.r8));
 }
 //5 bytes + 3 = 8 bytes
 ///fun_prologue emits the standard function prologue for x86_64
@@ -263,19 +263,7 @@ pub fn fun_prologue(emit: *em.Emitter, loc_count: u8) !void {
         try subImm(emit, u16, Register.rsp, loc_count * 8);
     }
 }
-pub fn gen_func_body(parser: *pf.FileParser) void {
-var sym : [1]u8 = {0};
 
-if (parser.program.getPtr(parser.cur_file)) |module| {
-sym = parser.readModule(parser.cur_name,module.emit.ip,1)
-while(sym != opcodes.Opcodes.end) : (true) {
-const r = code_gen_inst(sym);
-if(r == opcodes.Opcodes.End_prg){
-break;
-}
-}
-}
-}
 
 ///stub emits the stub byte stub_candidate of N times count
 ///returns start position of stub sequence
@@ -382,16 +370,16 @@ pub fn subImm(emit: *em.Emitter, comptime T: type, dest: Register, val: T) !void
             try emit.emitQuad(@as(u64, val));
             return;
         } else if (isExtended(dest)) {
-            try movImm(emit, u64, castReg(Register.rcx), val);
+            try movImm(emit, u64, Register.rcx, val);
             try rex(emit, 1, 0, 0, 1);
             try emit.emit(0x29);
-            try modrm(emit, 0x03, castReg(Register.rcx), dest);
+            try modrm(emit, 0x03, castReg(Register.rcx), castReg(dest));
         }
 
-        try movImm(emit, u64, castReg(Register.rcx), val);
+        try movImm(emit, u64, Register.rcx, val);
         try rex(emit, 1, 0, 0, 0);
         try emit.emit(0x29);
-        try modrm(emit, 0x03, castReg(Register.rcx), dest);
+        try modrm(emit, 0x03, castReg(Register.rcx), castReg(dest));
     }
 }
 

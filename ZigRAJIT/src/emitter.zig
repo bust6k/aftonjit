@@ -181,7 +181,7 @@ pub const Emitter = struct {
     }
 
     pub fn getBytes(self: *Emitter, i: usize, rc: usize) ![]u8 {
-        if ((i > self.ip) | (rc > self.ip)) {
+        if ((i > self.buffer.len) | (rc > self.buffer.len)) {
             return error.ErrorNumberTooLarge;
         }
 

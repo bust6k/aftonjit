@@ -1,0 +1,36 @@
+test "test gen_func" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fileParser = try pf.FileParser.init(allocator);
+    defer fileParser.deinit();
+    var ct = try CallTable.init(allocator);
+    defer ct.deinit();
+
+    const name: []u8 = try allocator.dupe(u8, "test.afton");
+    defer allocator.free(name);
+
+    const create_rights = std.fs.File.CreateFlags{
+        .read = true,
+    };
+    const open_rights = std.fs.File.OpenFlags{
+        .mode = .write_only,
+    };
+
+    const file = try std.fs.cwd().createFile(name, create_rights);
+    defer file.close();
+
+    try file.writeAll(&[_]u8{ @intFromEnum(opcodes.Opcode.fn_decl), 5,0,0});
+    try file.writeAll("testA");
+    try file.writeAll(&[_]u8{@intFromEnum(opcodes.Opcode.rem),@intFromEnum(opcodes.Opcode.dup),@intFromEnum(opcodes.Opcode.end)});
+    
+    try fileParser.addFile(allocator, name, open_rights);
+    try fileParser.writeFile(name);
+    try gen_func(&fileParser,&ct);
+    
+    try testing.expect(ct.cur_index == 1);
+    if(ct.indexMap.get("testA")) |val| { try testing.expect(val == 0);}
+    try testing.expect(ct.size == standardCTsize);
+    try testing.expect(ct.callTable[0] > 1);
+}

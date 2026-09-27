@@ -22,6 +22,10 @@ pub const relocType = enum(u8) {
     JMP,
     CALL,
     CALL_EXTERNAL,
+    //address of call table
+    CALL_TABLE,
+    //address of current emitter buffer
+    EMITTER,
     ADDR_ABS,
     ADDR_REL,
     EMBEDDED_OBJECT,
@@ -226,6 +230,7 @@ pub const Module = struct {
 pub const FileParser = struct {
     program: std.StringHashMap(Module),
     cur_file: []u8,
+    allocator: std.mem.Allocator,
     modulesCount: usize,
     mainModuleNo: usize,
     mainOff: u32,
@@ -280,10 +285,15 @@ pub const FileParser = struct {
         if (eql(u8, name, "main.afton")) {
             self.modulesCount += 1;
             self.mainModuleNo = self.modulesCount;
+            self.allocator.free(self.cur_file);
+            self.cur_file = try allocator.dupe(u8, name);
+
             return;
         }
         self.modulesCount += 1;
-        self.cur_file = name;
+        self.allocator.free(self.cur_file);
+        self.cur_file = try allocator.dupe(u8, name);
+
     }
 
     pub fn readModule(self: *FileParser, name: []const u8, i: usize, rc: usize) ![]const u8 {
@@ -300,7 +310,7 @@ pub const FileParser = struct {
         }
         return error.FileNotFound;
     }
- pub fn readModule(self: *FileParser, name: []const u8, i: usize, rc: usize) ![]const u8 {
+ pub fn readMachcode(self: *FileParser, name: []const u8, i: usize, rc: usize) ![]const u8 {
         var rcCpy: usize = rc;
 
         if ((rcCpy == 0)) {
@@ -329,6 +339,8 @@ pub const FileParser = struct {
                 if (n == 0) break;
                 try module.emit.emit(buf[0]);
             }
+            module.emit.ip = 0;
+            prt("module.emit.ip: {d}\n", .{module.emit.ip});
         } else {
             return error.FileNotFound;
         }
@@ -344,8 +356,8 @@ pub const FileParser = struct {
         }
     }
 
-    pub fn init(allocator: std.mem.Allocator) FileParser {
-        return FileParser{ .program = std.StringHashMap(Module).init(allocator) , .cur_file = allocator.alloc(u8,256), .modulesCount = 0, .mainModuleNo = 0, .mainOff = 0 };
+    pub fn init(allocator: std.mem.Allocator) !FileParser {
+        return FileParser{ .program = std.StringHashMap(Module).init(allocator), .cur_file = try allocator.alloc(u8, 256), .allocator = allocator, .modulesCount = 0, .mainModuleNo = 0, .mainOff = 0 };
     }
 
     pub fn deinit(self: *FileParser) void {
@@ -368,7 +380,7 @@ test "addFile with common file name" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const name: []u8 = try allocator.dupe(u8, "test.afton");
@@ -396,6 +408,7 @@ test "addFile with common file name" {
 
     try testing.expect(fileParser.modulesCount == 1);
     try testing.expect(fileParser.mainModuleNo == 0);
+    try testing.expect(eql(u8, fileParser.cur_file, "test.afton"));
 }
 
 test "addFile with non-existing file" {
@@ -403,7 +416,7 @@ test "addFile with non-existing file" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const name: []u8 = try allocator.dupe(u8, "test.afton");
@@ -424,6 +437,9 @@ test "addFile with non-existing file" {
 
     try testing.expect(fileParser.modulesCount == 1);
     try testing.expect(fileParser.mainModuleNo == 0);
+    try testing.expect(eql(u8, fileParser.cur_file, "test.afton"));
+
+
 }
 
 test "addFile with main.afton" {
@@ -431,7 +447,7 @@ test "addFile with main.afton" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const name: []u8 = try allocator.dupe(u8, "main.afton");
@@ -458,6 +474,10 @@ test "addFile with main.afton" {
 
     try testing.expect(fileParser.modulesCount == 1);
     try testing.expect(fileParser.mainModuleNo == 1);
+    try testing.expect(eql(u8, fileParser.cur_file, "main.afton"));
+
+
+
 }
 
 test "test detectInvalidUTF8Str with correct name" {
@@ -465,7 +485,7 @@ test "test detectInvalidUTF8Str with correct name" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const name_array = try allocator.dupe(u8, "correct.afton");
@@ -481,7 +501,7 @@ test "test detectInvalidUTF8Str with small name" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const name_array = try allocator.dupe(u8, "a");
@@ -495,7 +515,7 @@ test "test detectInvalidUTF8Str with incorrect UTF-8 byte" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const arr = try allocator.dupe(u8, &[_]u8{ 0xC0, 0x00 });
@@ -512,7 +532,7 @@ test "test readModule with correct file" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const name: []u8 = try allocator.dupe(u8, "foo.afton");
@@ -554,7 +574,7 @@ test "test readModule with non-existing file" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const name: []u8 = try allocator.dupe(u8, "non_existing.afton");
@@ -578,7 +598,7 @@ test "test readModule with too small arguments" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var fileParser = FileParser.init(allocator);
+    var fileParser = try FileParser.init(allocator);
     defer fileParser.deinit();
 
     const name: []u8 = try allocator.dupe(u8, "small.afton");
@@ -762,7 +782,7 @@ test "test relocIter at correct no-data relocation points" {
     try em.emit(0xD0); //register RAX
     var arr : RelocArr = try module.relocIter();
     defer arr.deinit();
-    prt("Relocation test result:\n", .{});
+    prt("Relocation test result at parse_file.zig:784 :\n", .{});
     try em.dump_code();
 
     
@@ -773,7 +793,7 @@ test "writeFile loads disk bytes" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    var fp = FileParser.init(allocator);
+    var fp = try FileParser.init(allocator);
     defer fp.deinit();
     const name = "tmp_writefile_check.afton";
     defer std.fs.cwd().deleteFile(name) catch {};
@@ -793,7 +813,7 @@ test "writeFile missing module fails" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    var fp = FileParser.init(allocator);
+    var fp = try FileParser.init(allocator);
     defer fp.deinit();
     try std.testing.expectError(error.FileNotFound, fp.writeFile("nope.afton"));
 }

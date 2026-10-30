@@ -47,7 +47,7 @@ const AssemblerX86_64Error = enum(u8) {
 var E: em.Emitter = undefined;
 
 fn init() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
 
     const allocator = gpa.allocator();
 
@@ -74,6 +74,35 @@ fn getOsName(os: builtin.target.os.tag) ![]u8 {
     }
 }
 
+const linuxProtHasDecls = @hasDecl(std.os.linux.PROT, "READ");
+const LinuxProt = if (linuxProtHasDecls) usize else std.os.linux.PROT;
+
+fn linuxProt(protection: usize) !LinuxProt {
+    if (comptime linuxProtHasDecls) {
+        return switch (protection) {
+            1 => std.os.linux.PROT.READ,
+            2 => std.os.linux.PROT.WRITE,
+            3 => std.os.linux.PROT.READ | std.os.linux.PROT.WRITE,
+            4 => std.os.linux.PROT.EXEC,
+            5 => std.os.linux.PROT.READ | std.os.linux.PROT.EXEC,
+            6 => std.os.linux.PROT.WRITE | std.os.linux.PROT.EXEC,
+            7 => std.os.linux.PROT.READ | std.os.linux.PROT.WRITE | std.os.linux.PROT.EXEC,
+            else => return error.InvalidProtection,
+        };
+    } else {
+        return switch (protection) {
+            1 => .{ .READ = true },
+            2 => .{ .WRITE = true },
+            3 => .{ .READ = true, .WRITE = true },
+            4 => .{ .EXEC = true },
+            5 => .{ .READ = true, .EXEC = true },
+            6 => .{ .WRITE = true, .EXEC = true },
+            7 => .{ .READ = true, .WRITE = true, .EXEC = true },
+            else => return error.InvalidProtection,
+        };
+    }
+}
+
 ///the flexible wrapper bottom raw OS-syscalls
 ///
 ///API of changeMemoryRights same as of POSIX's mmap syscall
@@ -84,16 +113,7 @@ fn getOsName(os: builtin.target.os.tag) ![]u8 {
 pub fn changeMemoryRights(address: [*]u8, length: usize, protection: usize) !void {
     switch (builtin.target.os.tag) {
         .linux, .macos => {
-            const prot: usize = switch (protection) {
-                1 => std.os.linux.PROT.READ,
-                2 => std.os.linux.PROT.WRITE,
-                3 => std.os.linux.PROT.READ | std.os.linux.PROT.WRITE,
-                4 => std.os.linux.PROT.EXEC,
-                5 => std.os.linux.PROT.READ | std.os.linux.PROT.EXEC,
-                6 => std.os.linux.PROT.WRITE | std.os.linux.PROT.EXEC,
-                7 => std.os.linux.PROT.READ | std.os.linux.PROT.WRITE | std.os.linux.PROT.EXEC,
-                else => return error.InvalidProtection,
-            };
+            const prot = try linuxProt(protection);
             const rc = std.os.linux.mprotect(address, length, prot);
             if (rc < 0) return error.MprotectFailed;
         },
@@ -234,6 +254,19 @@ pub fn instr_push(emit: *em.Emitter, comptime T: type, val: T) !void {
 ///instr_rem removes the last value from stack
 pub inline fn instr_rem(emit: *em.Emitter) !void {
     try subImm(emit, u64, Register.rsp, 8);
+}
+
+///instr_invoke calls the function at func_addr
+///
+///internally,moves the absolute function address to r11 and calls it
+pub fn instr_invoke(emit: *em.Emitter, func_addr: u64) !void {
+    try rex(emit, 1, 0, 0, 1);
+    try emit.emit(0xBB);
+    try emit.emitQuad(func_addr);
+
+    try emit.emit(0x41);
+    try emit.emit(0xFF);
+    try modrm(emit, 0b11, 0b010, castReg(Register.r11) & 0b111);
 }
 
 ///instr_dup copies the last value from stack
@@ -412,7 +445,7 @@ pub inline fn escape(emit: *em.Emitter) !void {
 }
 
 test "instr_push" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -445,7 +478,7 @@ test "instr_push" {
 }
 
 test "instr_ret" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -477,8 +510,27 @@ test "instr_ret" {
     try testing.expect(emitter.buffer[16] == 0xC3);
 }
 
+test "instr_invoke" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var emitter = try em.Emitter.init(allocator, 700);
+    defer emitter.deinit();
+
+    const func_addr: u64 = 0x1122334455667788;
+    try instr_invoke(&emitter, func_addr);
+
+    try testing.expectEqual(@as(usize, 13), emitter.ip);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        0x49, 0xBB,
+        0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+        0x41, 0xFF, 0xD3,
+    }, emitter.buffer[0..emitter.ip]);
+}
+
 test "instr_div" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -503,7 +555,7 @@ test "instr_div" {
 
 //TODO: that function work incorrect. fix div and them too
 test "instr_mul" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -526,7 +578,7 @@ test "instr_mul" {
 }
 
 test "instr_sub" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -550,7 +602,7 @@ test "instr_sub" {
 }
 
 test "instr_add" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -574,7 +626,7 @@ test "instr_add" {
 }
 
 test "pushReg" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var emitter = try em.Emitter.init(gpa.allocator(), 16);
     defer emitter.deinit();
@@ -591,7 +643,7 @@ test "pushReg" {
 }
 
 test "pushImm" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var emitter = try em.Emitter.init(gpa.allocator(), 32);
     defer emitter.deinit();
@@ -606,7 +658,7 @@ test "pushImm" {
 }
 
 test "movImm" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var emitter = try em.Emitter.init(gpa.allocator(), 32);
     defer emitter.deinit();
@@ -621,7 +673,7 @@ test "movImm" {
 }
 
 test "movMemValToReg" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var emitter = try em.Emitter.init(gpa.allocator(), 16);
     defer emitter.deinit();
@@ -634,7 +686,7 @@ test "movMemValToReg" {
 }
 
 test "popReg" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var emitter = try em.Emitter.init(gpa.allocator(), 16);
     defer emitter.deinit();
@@ -648,7 +700,7 @@ test "popReg" {
 }
 
 test "movRegs" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var emitter = try em.Emitter.init(gpa.allocator(), 16);
     defer emitter.deinit();
@@ -660,7 +712,7 @@ test "movRegs" {
 }
 
 test "subImm" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -683,7 +735,7 @@ test "subImm" {
 }
 
 test "nop" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -698,7 +750,7 @@ test "stub" {
     const stub_count = 80;
     const pos = 2;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -717,7 +769,7 @@ test "stub" {
 }
 
 test "rex" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -736,7 +788,7 @@ test "rex" {
 }
 
 test "modrm" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -752,7 +804,7 @@ test "modrm" {
 }
 
 test "sib" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

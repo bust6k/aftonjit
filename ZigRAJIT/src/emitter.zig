@@ -66,9 +66,8 @@ pub const Emitter = struct {
 
             if (alloc.alloc(u8, new_size)) |buf| {
                 return buf;
-            } else |err| switch (err) {
-                error.OutOfMemory => continue,
-                else => return err,
+            } else |_| {
+                continue;
             }
         }
         return EmitterError.ErrorMemoryExhausted;
@@ -86,14 +85,12 @@ pub const Emitter = struct {
         if (self.buffer.len < 4 * KB) {
             newbuf = alloc.alloc(u8, 4 * KB) catch |err| switch (err) {
                 error.OutOfMemory => try self.growBufferToSmallerSize(),
-                else => return err,
             };
             self.buffer_size = 4 * KB;
         } else {
             const double_size = 2 * self.buffer.len;
             newbuf = alloc.alloc(u8, double_size) catch |err| switch (err) {
                 error.OutOfMemory => try self.growBufferToSmallerSize(),
-                else => return err,
             };
             self.buffer_size = double_size;
         }
@@ -181,21 +178,16 @@ pub const Emitter = struct {
     }
 
     pub fn getBytes(self: *Emitter, i: usize, rc: usize) ![]u8 {
-        if ((i > self.buffer.len) | (rc > self.buffer.len)) {
+        if (i > self.buffer.len or rc > self.buffer.len or i + rc > self.buffer.len) {
             return error.ErrorNumberTooLarge;
         }
 
         const alloc = try self.getAllocator();
-        var iCpy: usize = i;
-        const rcCpy: usize = rc;
-
-        var res: []u8 = try alloc.alloc(u8, rcCpy);
+        const res: []u8 = try alloc.alloc(u8, rc);
 
         errdefer alloc.free(res);
 
-        while (iCpy < rcCpy) : (iCpy += 1) {
-            res[iCpy] = self.buffer[iCpy];
-        }
+        @memcpy(res, self.buffer[i .. i + rc]);
 
         return res;
     }
@@ -204,7 +196,7 @@ pub const Emitter = struct {
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         const allocator = fba.allocator();
 
-        var list = std.ArrayList(u8){};
+        var list = std.ArrayList(u8).empty;
         
         try list.append(allocator,'{');
 
@@ -212,7 +204,7 @@ pub const Emitter = struct {
             if (i % 16 == 0 and i > 0) {
                 try list.append(allocator,'\n');
             }
-            try list.writer(allocator).print("{x:0>2}, ", .{byte});
+            try list.print(allocator, "{x:0>2}, ", .{byte});
         }
 
         try list.append(allocator,'}');
@@ -222,7 +214,7 @@ pub const Emitter = struct {
 };
 
 test "Testing emit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -235,7 +227,7 @@ test "Testing emit" {
 }
 
 test "Testing emitS" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -252,7 +244,7 @@ test "Testing emitS" {
 }
 
 test "Testing emitWord" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -266,7 +258,7 @@ test "Testing emitWord" {
 }
 
 test "Testing emitDWord" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -280,7 +272,7 @@ test "Testing emitDWord" {
 }
 
 test "Testing emitQuad" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -294,7 +286,7 @@ test "Testing emitQuad" {
 }
 
 test "Testing getPrevByte" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -307,7 +299,7 @@ test "Testing getPrevByte" {
 }
 
 test "Testing getCurrByte" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -320,7 +312,7 @@ test "Testing getCurrByte" {
 }
 
 test "Testing getBytes" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

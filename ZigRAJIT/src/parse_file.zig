@@ -1,6 +1,7 @@
 const std = @import("std");
 const emitter = @import("emitter.zig");
 const asmx64 = @import("assembler-x86_64.zig");
+const fs_compat = @import("fs_compat.zig");
 
 const testing = std.testing;
 const eql = std.mem.eql;
@@ -114,7 +115,7 @@ pub const Module = struct {
     name: []u8,
     //emit - is an .afton buffer,which contains source code of .afton program
     emit: emitter.Emitter,
-    //machcode - is a buffer consisting of generated machine code to that .afton program file
+    //machcode - is a buffer consisting of generated machine code of that .afton program file
     machcode: emitter.Emitter,
     rc: usize,
     symbols: std.StringHashMap(u32),
@@ -263,15 +264,9 @@ pub const FileParser = struct {
         return true;
     }
 
-    pub fn addFile(self: *FileParser, allocator: std.mem.Allocator, name: []const u8, rights: std.fs.File.OpenFlags) !void {
-        var file: std.fs.File = undefined;
-
-        file = std.fs.cwd().openFile(name, rights) catch |err| switch (err) {
-            error.FileNotFound => try std.fs.cwd().createFile(name, .{}),
-            else => return err,
-        };
-
-        defer file.close();
+    pub fn addFile(self: *FileParser, allocator: std.mem.Allocator, name: []const u8, rights: anytype) !void {
+        _ = rights;
+        try fs_compat.ensureFile(name);
 
         const emit = try emitter.Emitter.init(allocator, emitter.standardEmSize);
                  
@@ -328,17 +323,12 @@ pub const FileParser = struct {
 
     pub fn writeFile(self: *FileParser, name: []const u8) !void {
         if (self.program.getPtr(name)) |module| {
-            var file = std.fs.cwd().openFile(name, .{ .mode = .read_only }) catch {
+            const data = fs_compat.readFileAlloc(self.allocator, name, std.math.maxInt(usize)) catch {
                 return error.FileNotFound;
             };
-            defer file.close();
+            defer self.allocator.free(data);
 
-            var buf: [1]u8 = undefined;
-            while (true) {
-                const n = try file.read(&buf);
-                if (n == 0) break;
-                try module.emit.emit(buf[0]);
-            }
+            try module.emit.emitS(data);
             module.emit.ip = 0;
             prt("module.emit.ip: {d}\n", .{module.emit.ip});
         } else {
@@ -376,7 +366,7 @@ pub const FileParser = struct {
 };
 
 test "addFile with common file name" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -386,17 +376,10 @@ test "addFile with common file name" {
     const name: []u8 = try allocator.dupe(u8, "test.afton");
     defer allocator.free(name);
 
-    const create_rights = std.fs.File.CreateFlags{
-        .read = true,
-    };
-    const open_rights = std.fs.File.OpenFlags{
-        .mode = .read_only,
-    };
+    try fs_compat.ensureFile(name);
+    defer fs_compat.deleteFile(name) catch {};
 
-    _ = try std.fs.cwd().createFile(name, create_rights);
-    defer std.fs.cwd().deleteFile(name) catch {};
-
-    _ = try fileParser.addFile(allocator, name, open_rights);
+    _ = try fileParser.addFile(allocator, name, .{});
 
     const module: ?*Module = fileParser.program.getPtr(name);
 
@@ -412,7 +395,7 @@ test "addFile with common file name" {
 }
 
 test "addFile with non-existing file" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -421,11 +404,8 @@ test "addFile with non-existing file" {
 
     const name: []u8 = try allocator.dupe(u8, "test.afton");
     defer allocator.free(name);
-    const open_rights = std.fs.File.OpenFlags{
-        .mode = .read_only,
-    };
 
-    _ = try fileParser.addFile(allocator, name, open_rights);
+    _ = try fileParser.addFile(allocator, name, .{});
 
     const module: ?*Module = fileParser.program.getPtr(name);
 
@@ -443,7 +423,7 @@ test "addFile with non-existing file" {
 }
 
 test "addFile with main.afton" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -453,17 +433,10 @@ test "addFile with main.afton" {
     const name: []u8 = try allocator.dupe(u8, "main.afton");
     defer allocator.free(name);
 
-    const create_rights = std.fs.File.CreateFlags{
-        .read = true,
-    };
-    const open_rights = std.fs.File.OpenFlags{
-        .mode = .read_only,
-    };
+    try fs_compat.ensureFile(name);
+    defer fs_compat.deleteFile(name) catch {};
 
-    _ = try std.fs.cwd().createFile(name, create_rights);
-    defer std.fs.cwd().deleteFile(name) catch {};
-
-    _ = try fileParser.addFile(allocator, name, open_rights);
+    _ = try fileParser.addFile(allocator, name, .{});
 
     const module = fileParser.program.getPtr(name);
     if (module) |moduleName| {
@@ -481,7 +454,7 @@ test "addFile with main.afton" {
 }
 
 test "test detectInvalidUTF8Str with correct name" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -498,7 +471,7 @@ test "test detectInvalidUTF8Str with correct name" {
 }
 
 test "test detectInvalidUTF8Str with small name" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var fileParser = try FileParser.init(allocator);
@@ -512,7 +485,7 @@ test "test detectInvalidUTF8Str with small name" {
 }
 
 test "test detectInvalidUTF8Str with incorrect UTF-8 byte" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var fileParser = try FileParser.init(allocator);
@@ -528,7 +501,7 @@ test "test detectInvalidUTF8Str with incorrect UTF-8 byte" {
 }
 
 test "test readModule with correct file" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -538,17 +511,10 @@ test "test readModule with correct file" {
     const name: []u8 = try allocator.dupe(u8, "foo.afton");
     defer allocator.free(name);
 
-    const create_rights = std.fs.File.CreateFlags{
-        .read = true,
-    };
-    const open_rights = std.fs.File.OpenFlags{
-        .mode = .read_only,
-    };
+    try fs_compat.ensureFile(name);
+    defer fs_compat.deleteFile(name) catch {};
 
-    _ = try std.fs.cwd().createFile(name, create_rights);
-    defer std.fs.cwd().deleteFile(name) catch {};
-
-    _ = try fileParser.addFile(allocator, name, open_rights);
+    _ = try fileParser.addFile(allocator, name, .{});
 
     if (fileParser.program.getPtr(name)) |module| {
         try module.emit.emit(0xAA);
@@ -570,7 +536,7 @@ test "test readModule with correct file" {
 }
 
 test "test readModule with non-existing file" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -594,7 +560,7 @@ test "test readModule with non-existing file" {
 }
 
 test "test readModule with too small arguments" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -605,17 +571,10 @@ test "test readModule with too small arguments" {
 
     defer allocator.free(name);
 
-    const create_rights = std.fs.File.CreateFlags{
-        .read = true,
-    };
-    const open_rights = std.fs.File.OpenFlags{
-        .mode = .read_only,
-    };
+    try fs_compat.ensureFile(name);
+    defer fs_compat.deleteFile(name) catch {};
 
-    _ = try std.fs.cwd().createFile(name, create_rights);
-    defer std.fs.cwd().deleteFile(name) catch {};
-
-    _ = try fileParser.addFile(allocator, name, open_rights);
+    _ = try fileParser.addFile(allocator, name, .{});
 
     if (fileParser.program.getPtr(name)) |module| {
         try module.emit.emit(0xDA);
@@ -631,7 +590,7 @@ test "test readModule with too small arguments" {
 }
 
 test "test relocWrite without data" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -663,7 +622,7 @@ test "test relocWrite without data" {
 }
 
 test "test relocWrite with correct relocType data" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -698,7 +657,7 @@ test "test relocWrite with correct relocType data" {
 }
 
 test "test relocWrite with incorrect relocType data" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -733,7 +692,7 @@ test "test relocWrite with incorrect relocType data" {
 }
 
 test "test relocIter at correct no-data relocation points" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -790,19 +749,15 @@ test "test relocIter at correct no-data relocation points" {
 
 
 test "writeFile loads disk bytes" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var fp = try FileParser.init(allocator);
     defer fp.deinit();
     const name = "tmp_writefile_check.afton";
-    defer std.fs.cwd().deleteFile(name) catch {};
-    {
-        var f = try std.fs.cwd().createFile(name, .{ .read = true });
-        try f.writeAll(&[_]u8{ 0x41, 0x42, 0x43 });
-        f.close();
-    }
-    try fp.addFile(allocator, name, .{ .mode = .read_only });
+    defer fs_compat.deleteFile(name) catch {};
+    try fs_compat.writeFileAll(name, &[_]u8{ 0x41, 0x42, 0x43 });
+    try fp.addFile(allocator, name, .{});
     try fp.writeFile(name);
     const res = try fp.readModule(name, 0, 3);
     defer allocator.free(res);
@@ -810,7 +765,7 @@ test "writeFile loads disk bytes" {
 }
 
 test "writeFile missing module fails" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var fp = try FileParser.init(allocator);

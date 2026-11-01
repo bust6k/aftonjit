@@ -183,7 +183,12 @@ fn code_gen_inst(parser: *pf.FileParser, ct: *CallTable, instr: decoder.Instruct
                 .invoke => {
                     const fn_name = decoder.nameFromOperands(instr.operands);
                     const fn_index = ct.indexMap.get(fn_name) orelse return error.UnknownFunction;
-                    try asmx64.instr_invoke(&module.machcode, @intCast(ct.callTable[fn_index]));
+                    try asmx64.instr_invoke(
+                        &module.machcode,
+                        @intFromPtr(ct.callTable.ptr),
+                        fn_index,
+                        @sizeOf(usize),
+                    );
                 },
                 .end_prg => return @intFromEnum(opcodes.Opcode.end_prg),
                 else => {},
@@ -404,10 +409,10 @@ test "test gen_module generates invoke" {
     try testing.expectEqual(@as(usize, 1), ct.indexMap.get("main").?);
 
     const module = parser.program.getPtr(name).?;
-    const func_addr = ct.callTable[0];
-    var expected = [_]u8{ 0x49, 0xBB, 0, 0, 0, 0, 0, 0, 0, 0, 0x41, 0xFF, 0xD3 };
+    const call_table_base = @intFromPtr(ct.callTable.ptr);
+    var expected = [_]u8{ 0x49, 0xBB, 0, 0, 0, 0, 0, 0, 0, 0, 0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0x41, 0xFF, 0x14, 0xC3 };
     for (0..8) |i| {
-        expected[2 + i] = @truncate(func_addr >> @as(u6, @intCast(8 * i)));
+        expected[2 + i] = @truncate(call_table_base >> @as(u6, @intCast(8 * i)));
     }
 
     try testing.expect(std.mem.indexOf(u8, module.machcode.buffer[0..module.machcode.ip], &expected) != null);

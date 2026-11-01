@@ -256,17 +256,38 @@ pub inline fn instr_rem(emit: *em.Emitter) !void {
     try subImm(emit, u64, Register.rsp, 8);
 }
 
-///instr_invoke calls the function at func_addr
+///instr_invoke calls the function stored in the Call Table entry selected by SIB
 ///
-///internally,moves the absolute function address to r11 and calls it
-pub fn instr_invoke(emit: *em.Emitter, func_addr: u64) !void {
+///emits: call qword ptr [r11 + rax * scale]
+///
+///base  - address of the Call Table
+///index - index of the function inside the Call Table
+///scale - size of one Call Table element in bytes (1, 2, 4 or 8)
+///
+///x86 SIB computes the effective address as base + index * scale, so the
+///register index is multiplied by scale to get the byte offset inside the table
+pub fn instr_invoke(emit: *em.Emitter, base: usize, index: usize, scale: usize) !void {
+    const scale_bits: u2 = switch (scale) {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        else => return error.InvalidSibScale,
+    };
+
+    
     try rex(emit, 1, 0, 0, 1);
     try emit.emit(0xBB);
-    try emit.emitQuad(func_addr);
+    try emit.emitQuad(@intCast(base));
 
-    try emit.emit(0x41);
+    
+    try movImm(emit, u64, Register.rax, @intCast(index));
+
+    
+    try rex(emit, 0, 0, 0, 1); 
     try emit.emit(0xFF);
-    try modrm(emit, 0b11, 0b010, castReg(Register.r11) & 0b111);
+    try modrm(emit, 0b00, 0b010, 0b100); // /2, rm=100 means SIB follows
+    try sib(emit, scale_bits, castReg(Register.rax) & 0b111, castReg(Register.r11) & 0b111);
 }
 
 ///instr_dup copies the last value from stack
@@ -518,14 +539,17 @@ test "instr_invoke" {
     var emitter = try em.Emitter.init(allocator, 700);
     defer emitter.deinit();
 
-    const func_addr: u64 = 0x1122334455667788;
-    try instr_invoke(&emitter, func_addr);
+    const base: usize = 0x1122334455667788;
+    const index: usize = 0x2A;
+    try instr_invoke(&emitter, base, index, @sizeOf(usize));
 
-    try testing.expectEqual(@as(usize, 13), emitter.ip);
+    try testing.expectEqual(@as(usize, 24), emitter.ip);
     try testing.expectEqualSlices(u8, &[_]u8{
         0x49, 0xBB,
         0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
-        0x41, 0xFF, 0xD3,
+        0x48, 0xB8,
+        0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x41, 0xFF, 0x14, 0xC3,
     }, emitter.buffer[0..emitter.ip]);
 }
 

@@ -266,14 +266,15 @@ pub const FileParser = struct {
 
     pub fn addFile(self: *FileParser, allocator: std.mem.Allocator, name: []const u8, rights: anytype) !void {
         _ = rights;
+        _ = allocator;
         try fs_compat.ensureFile(name);
 
-        const emit = try emitter.Emitter.init(allocator, emitter.standardEmSize);
+        const emit = try emitter.Emitter.init(self.allocator, emitter.standardEmSize);
                  
-        const machcode = try emitter.Emitter.init(allocator, emitter.standardEmSize  * 2);
+        const machcode = try emitter.Emitter.init(self.allocator, emitter.standardEmSize  * 2);
 
  
-        const module = try Module.init(allocator, name, emit,machcode);
+        const module = try Module.init(self.allocator, name, emit,machcode);
 
         try self.program.put(name, module);
 
@@ -281,13 +282,13 @@ pub const FileParser = struct {
             self.modulesCount += 1;
             self.mainModuleNo = self.modulesCount;
             self.allocator.free(self.cur_file);
-            self.cur_file = try allocator.dupe(u8, name);
+            self.cur_file = try self.allocator.dupe(u8, name);
 
             return;
         }
         self.modulesCount += 1;
         self.allocator.free(self.cur_file);
-        self.cur_file = try allocator.dupe(u8, name);
+        self.cur_file = try self.allocator.dupe(u8, name);
 
     }
 
@@ -356,9 +357,10 @@ pub const FileParser = struct {
         while (it.next()) |module| {
             module.deinit();
         }
-        self.program.deinit();
+
         self.allocator.free(self.cur_file);
-        
+        self.program.deinit();
+                
         self.modulesCount = 0;
         self.mainModuleNo = 0;
         self.mainOff = 0;

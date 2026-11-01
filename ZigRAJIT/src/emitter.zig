@@ -192,22 +192,21 @@ pub const Emitter = struct {
         return res;
     }
     pub fn dump_code(self: *Emitter) !void {
-        var buf: [2048]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buf);
-        const allocator = fba.allocator();
+        const allocator = try self.getAllocator();
 
-        var list = std.ArrayList(u8).empty;
-        
-        try list.append(allocator,'{');
+        var list: std.ArrayList(u8) = .empty;
+        defer list.deinit(allocator);
 
-        for (self.buffer, 0..) |byte, i| {
+        try list.append(allocator, '{');
+
+        for (self.buffer[0..self.ip], 0..) |byte, i| {
             if (i % 16 == 0 and i > 0) {
-                try list.append(allocator,'\n');
+                try list.append(allocator, '\n');
             }
             try list.print(allocator, "{x:0>2}, ", .{byte});
         }
 
-        try list.append(allocator,'}');
+        try list.append(allocator, '}');
 
         std.debug.print("{s}\n", .{list.items});
     }

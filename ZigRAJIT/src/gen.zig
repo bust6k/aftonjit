@@ -104,6 +104,8 @@ pub fn gen_module(parser: *pf.FileParser, ct: *CallTable) !void {
             _ = try code_gen_inst(parser, ct, instr);
         }
     }
+    
+    try module.machcode.dump_code();
 }
 
 pub fn gen_func(parser: *pf.FileParser, ct: *CallTable) !void {

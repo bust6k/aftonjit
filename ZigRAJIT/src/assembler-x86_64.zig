@@ -3,11 +3,12 @@ const em = @import("emitter.zig");
 const log = @import("logger.zig");
 const retExtensions = @import("enum/opcodes.zig");
 const opcodes = @import("enum/opcodes.zig");
+const arguments = @import("enum/arguments.zig");
 const pf = @import("parse_file.zig");
 const testing = std.testing;
 const builtin = @import("builtin");
 
-const Register = enum(u8) {
+pub const Register = enum(u8) {
     rax = 0,
     rcx = 1,
     rdx = 2,
@@ -32,6 +33,21 @@ const Register = enum(u8) {
     ebp = 21,
     esi = 22,
     edi = 23,
+};
+
+/// Operand is a low-level representation of a value that an instruction can
+/// consume. Scalars arrive either as compile-time immediates or as arguments
+/// already placed in their ABI registers by the caller.
+pub const Operand = union(enum) {
+    imm: u64,
+    reg: Register,
+};
+
+pub const BinOp = enum {
+    add,
+    sub,
+    mul,
+    divide,
 };
 
 const AssemblerX86_64Error = enum(u8) {
@@ -138,50 +154,102 @@ fn castReg(reg: Register) u8 {
     return @intFromEnum(reg);
 }
 
+///movRegToReg emits a full 64-bit register-to-register move.
+///
+/// Unlike movRegs it emits the REX prefix required for r8-r15.
+pub fn movRegToReg(emit: *em.Emitter, src: Register, dest: Register) !void {
+    const src_reg = castReg(src);
+    const dest_reg = castReg(dest);
+
+    try rex(emit, 1, @intFromBool(src_reg >= 8), 0, @intFromBool(dest_reg >= 8));
+    try emit.emit(0x89);
+    try modrm(emit, 0b11, src_reg & 0b111, dest_reg & 0b111);
+}
+
+///loadOperand materializes an operand into dest.
+fn loadOperand(emit: *em.Emitter, operand: Operand, dest: Register) !void {
+    switch (operand) {
+        .imm => |val| try movImm(emit, u64, dest, val),
+        .reg => |reg| try movRegToReg(emit, reg, dest),
+    }
+}
+
+///instr_binop performs a 64-bit binary operation on two operands and pushes the
+///result onto the stack.
+///
+/// Operands may be immediates or scalar arguments already living in GPRs.
+pub fn instr_binop(emit: *em.Emitter, op: BinOp, a: Operand, b: Operand) !void {
+    switch (op) {
+        .add => {
+            try loadOperand(emit, a, Register.rax);
+            try loadOperand(emit, b, Register.rcx);
+
+            try rex(emit, 1, 0, 0, 0);
+            try emit.emit(0x01);
+            try modrm(emit, 0b11, castReg(Register.rcx), castReg(Register.rax));
+        },
+        .sub => {
+            try loadOperand(emit, a, Register.rax);
+            try loadOperand(emit, b, Register.rcx);
+
+            try rex(emit, 1, 0, 0, 0);
+            try emit.emit(0x29);
+            try modrm(emit, 0b11, castReg(Register.rcx), castReg(Register.rax));
+        },
+        .mul => {
+            try loadOperand(emit, a, Register.rax);
+            try loadOperand(emit, b, Register.rcx);
+
+            try rex(emit, 1, 0, 0, 0);
+            try escape(emit);
+            try emit.emit(0xAF);
+            try modrm(emit, 0b11, castReg(Register.rax), castReg(Register.rcx));
+        },
+        .divide => {
+            switch (b) {
+                .imm => |val| if (val == 0) {
+                    log.fatal("divide by 0 is forbidden", .{});
+                    return error.ErrorDivideByNull;
+                },
+                .reg => {},
+            }
+
+            try loadOperand(emit, a, Register.rax);
+
+            try rex(emit, 1, 0, 0, 0);
+            try emit.emit(0x33);
+            try modrm(emit, 0b11, castReg(Register.rdx), castReg(Register.rdx));
+
+            try loadOperand(emit, b, Register.rbx);
+
+            try rex(emit, 1, 0, 0, 0);
+            try emit.emit(0xF7);
+            try modrm(emit, 0b11, 0b110, castReg(Register.rbx));
+        },
+    }
+
+    try pushReg64(emit, Register.rax);
+}
+
 ///instr_add adds two  64-bit numbers or variables and puts calculated value  onto the stack
 ///
 /// internally uses registers for store data  to operations or stack if all registers are busy
 pub fn instr_add(emit: *em.Emitter, a: u64, b: u64) !void {
-    try movImm(emit, u64, Register.rax, a);
-    try movImm(emit, u64, Register.rcx, b);
-
-    try rex(emit, 1, 0, 0, 0);
-    try emit.emit(0x01);
-    try modrm(emit, 0b11, castReg(Register.rcx), castReg(Register.rax));
-
-    try rex(emit, 1, 0, 0, 0);
-    try pushReg(emit, Register.rax);
+    try instr_binop(emit, .add, .{ .imm = a }, .{ .imm = b });
 }
 
 ///instr_sub subs two  64-bit numbers or variables and puts calculated value onto the stack
 ///
 /// internally uses registers for store data  to operations or stack if all registers are busy
 pub fn instr_sub(emit: *em.Emitter, a: u64, b: u64) !void {
-    try movImm(emit, u64, Register.rax, a);
-    try movImm(emit, u64, Register.rcx, b);
-
-    try rex(emit, 1, 0, 0, 0);
-    try emit.emit(0x29);
-    try modrm(emit, 0b11, castReg(Register.rcx), castReg(Register.rax));
-
-    try rex(emit, 1, 0, 0, 0);
-    try pushReg(emit, Register.rax);
+    try instr_binop(emit, .sub, .{ .imm = a }, .{ .imm = b });
 }
 
 ///instr_mul multiplies two  64-bit numbers or variables and puts calculated value onto the stack
 ///
 /// internally uses registers for store data  to operations or stack if all registers are busy
 pub fn instr_mul(emit: *em.Emitter, a: u64, b: u64) !void {
-    try movImm(emit, u64, Register.rax, a);
-    try movImm(emit, u64, Register.rcx, b);
-
-    try rex(emit, 1, 0, 0, 0);
-    try escape(emit);
-    try emit.emit(0xAF);
-    try modrm(emit, 0b11, castReg(Register.rax), castReg(Register.rcx));
-
-    try rex(emit, 1, 0, 0, 0);
-    try pushReg(emit, Register.rax);
+    try instr_binop(emit, .mul, .{ .imm = a }, .{ .imm = b });
 }
 
 ///instr_div divides  two  64-bit numbers or variables and puts calculated value onto the stack
@@ -190,24 +258,7 @@ pub fn instr_mul(emit: *em.Emitter, a: u64, b: u64) !void {
 ///
 /// when divider is zero,instr_div returns ErrorDivideByNull error
 pub fn instr_div(emit: *em.Emitter, a: u64, b: u64) !void {
-    if (b == 0) {
-        log.fatal("divide by 0 is forbidden", .{});
-        return error.ErrorDivideByNull;
-    }
-
-    try movImm(emit, u64, Register.rax, a);
-
-    try rex(emit, 1, 0, 0, 0);
-    try emit.emit(0x33);
-    try modrm(emit, 0b11, castReg(Register.rdx), castReg(Register.rdx));
-
-    try movImm(emit, u64, Register.rbx, b);
-
-    try rex(emit, 1, 0, 0, 0);
-    try emit.emit(0xF7);
-    try modrm(emit, 0b11, 0b110, castReg(Register.rbx));
-    try rex(emit, 1, 0, 0, 0);
-    try pushReg(emit, Register.rax);
+    try instr_binop(emit, .divide, .{ .imm = a }, .{ .imm = b });
 }
 
 ///instr_ret exit from function  also returning value/variable/nothing
@@ -233,6 +284,32 @@ pub fn instr_ret(emit: *em.Emitter, ret_ex: retExtensions.RetExtension, ret_val:
         try emit.emit(0xC9);
         try emit.emit(0xC3);
     }
+}
+
+///gprArgRegister maps an Afton ABI scalar argument position to its GPR.
+///
+/// Afton ABI v1 places scalar integer/pointer arguments in R8..R13.
+pub fn gprArgRegister(arg_num: arguments.ArgSlot) Register {
+    return switch (arg_num) {
+        .arg1 => .r8,
+        .arg2 => .r9,
+        .arg3 => .r10,
+        .arg4 => .r11,
+        .arg5 => .r12,
+        .arg6 => .r13,
+    };
+}
+
+///instr_push_arg pushes an integer/pointer scalar argument onto the stack.
+pub fn instr_push_arg(emit: *em.Emitter, arg_num: arguments.ArgSlot) !void {
+    try pushReg64(emit, gprArgRegister(arg_num));
+}
+
+///instr_ret_arg returns an integer/pointer scalar argument in RAX.
+pub fn instr_ret_arg(emit: *em.Emitter, arg_num: arguments.ArgSlot) !void {
+    try movRegToReg(emit, gprArgRegister(arg_num), Register.rax);
+    try emit.emit(0xC9);
+    try emit.emit(0xC3);
 }
 
 pub fn instr_push(emit: *em.Emitter, comptime T: type, val: T) !void {
@@ -267,6 +344,25 @@ pub inline fn instr_rem(emit: *em.Emitter) !void {
 ///x86 SIB computes the effective address as base + index * scale, so the
 ///register index is multiplied by scale to get the byte offset inside the table
 pub fn instr_invoke(emit: *em.Emitter, base: usize, index: usize, scale: usize) !void {
+    try instr_invoke_args(emit, base, index, scale, 0);
+}
+
+///instr_invoke_args is instr_invoke with scalar argument passing.
+///
+/// The caller pushes scalar arguments in declaration order (arg1 first). Before
+/// the call they are popped in reverse order into the Afton ABI argument
+/// registers R8..R13, so arg1 ends up in R8 and argN in R(8 + N - 1).
+pub fn instr_invoke_args(emit: *em.Emitter, base: usize, index: usize, scale: usize, arg_count: usize) !void {
+    if (arg_count > 6) {
+        return error.ErrorTooManyArguments;
+    }
+
+    var arg: usize = arg_count;
+    while (arg > 0) : (arg -= 1) {
+        const slot: arguments.ArgSlot = @enumFromInt(@as(u8, @intCast(0x1A + (arg - 1) * 0x10)));
+        try popReg64(emit, gprArgRegister(slot));
+    }
+
     const scale_bits: u2 = switch (scale) {
         1 => 0,
         2 => 1,
@@ -354,6 +450,24 @@ pub inline fn pushReg(emit: *em.Emitter, regNumber: Register) !void {
     }
 
     try emit.emit(0x50 | castReg(regNumber));
+}
+
+///pushReg64 pushes a full 64-bit GPR, emitting REX.B for r8-r15.
+pub fn pushReg64(emit: *em.Emitter, regNumber: Register) !void {
+    const reg = castReg(regNumber);
+    if (reg >= 8 and reg <= 15) {
+        try rex(emit, 0, 0, 0, 1);
+    }
+    try emit.emit(0x50 | (reg & 0b111));
+}
+
+///popReg64 pops a full 64-bit GPR, emitting REX.B for r8-r15.
+pub fn popReg64(emit: *em.Emitter, regNumber: Register) !void {
+    const reg = castReg(regNumber);
+    if (reg >= 8 and reg <= 15) {
+        try rex(emit, 0, 0, 0, 1);
+    }
+    try emit.emit(0x58 | (reg & 0b111));
 }
 
 pub fn pushImm(emit: *em.Emitter, comptime T: type, val: T) !void {
@@ -551,6 +665,92 @@ test "instr_invoke" {
         0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x41, 0xFF, 0x14, 0xC3,
     }, emitter.buffer[0..emitter.ip]);
+}
+
+test "gprArgRegister maps scalar arguments to ABI registers" {
+    try testing.expectEqual(Register.r8, gprArgRegister(.arg1));
+    try testing.expectEqual(Register.r9, gprArgRegister(.arg2));
+    try testing.expectEqual(Register.r10, gprArgRegister(.arg3));
+    try testing.expectEqual(Register.r11, gprArgRegister(.arg4));
+    try testing.expectEqual(Register.r12, gprArgRegister(.arg5));
+    try testing.expectEqual(Register.r13, gprArgRegister(.arg6));
+}
+
+test "instr_push_arg pushes the argument ABI register" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var emitter = try em.Emitter.init(allocator, 32);
+    defer emitter.deinit();
+
+    try instr_push_arg(&emitter, .arg1);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x41, 0x50 }, emitter.buffer[0..emitter.ip]);
+
+    try instr_push_arg(&emitter, .arg6);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x41, 0x50, 0x41, 0x55 }, emitter.buffer[0..emitter.ip]);
+}
+
+test "instr_ret_arg returns the argument ABI register" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var emitter = try em.Emitter.init(allocator, 32);
+    defer emitter.deinit();
+
+    try instr_ret_arg(&emitter, .arg1);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x4C, 0x89, 0xC0, 0xC9, 0xC3 }, emitter.buffer[0..emitter.ip]);
+}
+
+test "instr_invoke_args pops scalar arguments in reverse order" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var emitter = try em.Emitter.init(allocator, 128);
+    defer emitter.deinit();
+
+    const base: usize = 0x1122334455667788;
+    try instr_invoke_args(&emitter, base, 0x2A, @sizeOf(usize), 2);
+
+    try testing.expectEqual(@as(usize, 28), emitter.ip);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        0x41, 0x59, // pop r9  (arg2)
+        0x41, 0x58, // pop r8  (arg1)
+    }, emitter.buffer[0..4]);
+}
+
+test "scalar arguments flow through push, binop and ret" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var emitter = try em.Emitter.init(allocator, 1024);
+    defer emitter.deinit();
+
+    const callee_off = emitter.ip;
+    try fun_prologue(&emitter, 0);
+    try instr_push_arg(&emitter, .arg1);
+    try instr_push_arg(&emitter, .arg2);
+    try instr_binop(&emitter, .add, .{ .reg = .r8 }, .{ .reg = .r9 });
+    try instr_ret(&emitter, retExtensions.RetExtension.stack, 0);
+
+    const callee_addr = @intFromPtr(emitter.buffer.ptr) + callee_off;
+    const caller_off = emitter.ip;
+
+    try movRegToReg(&emitter, .rdi, .r8);
+    try movRegToReg(&emitter, .rsi, .r9);
+    try movImm(&emitter, u64, .rax, callee_addr);
+    try emitter.emit(0xFF);
+    try modrm(&emitter, 0b11, 0b010, 0b000);
+    try emitter.emit(0xC3);
+
+    try changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 5);
+    defer changeMemoryRights(emitter.buffer.ptr, emitter.buffer.len, 3) catch {};
+
+    const caller = @as(*const fn (u64, u64) callconv(.c) u64, @ptrFromInt(@intFromPtr(emitter.buffer.ptr) + caller_off));
+    try testing.expectEqual(@as(u64, 12), caller(5, 7));
 }
 
 test "instr_div" {

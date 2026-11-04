@@ -2,6 +2,7 @@ const std = @import("std");
 const em = @import("emitter.zig");
 const log = @import("logger.zig");
 const opcodes = @import("enum/opcodes.zig");
+const args = @import("enum/arguments.zig");
 const pf = @import("parse_file.zig");
 const testing = std.testing;
 const builtin = @import("builtin");
@@ -17,10 +18,81 @@ pub const GenerationError = error{
     BadMagic,
     ExpectedFnDecl,
     UnknownFunction,
+    UnsupportedArgumentType,
 };
+
+pub const TypeId = enum(u8) {
+    void,
+    i8, i16, i32, i64,
+    u8, u16, u32, u64,
+    bool,
+    f32, f64,
+    pointer,
+    aggregate,
+};
+
+const Value = struct {
+    typ: TypeId,
+    data: [32]u8,
+};
+
+pub const Argument = struct {
+    arg_num: args.ArgSlot,
+    val: Value,
+
+    ///scalar builds a scalar argument with the given ABI type.
+    pub fn scalar(arg_num: args.ArgSlot, typ: TypeId) Argument {
+        return Argument{
+            .arg_num = arg_num,
+            .val = .{
+                .typ = typ,
+                .data = std.mem.zeroes([32]u8),
+            },
+        };
+    }
+
+    ///isFloat reports whether the argument belongs to the YMM register class.
+    pub fn isFloat(self: Argument) bool {
+        return self.val.typ == .f32 or self.val.typ == .f64;
+    }
+};
+
+///Operand is the high-level representation of a value consumed by an
+///instruction: either a compile-time literal or a positional function argument.
+pub const Operand = union(enum) {
+    literal: u64,
+    argument: Argument,
+};
+
+///argumentFromByte decodes ARG1..ARG6 placeholders into a scalar Argument.
+pub fn argumentFromByte(byte: u8) ?Argument {
+    const slot = std.meta.intToEnum(args.ArgSlot, byte) catch return null;
+    return Argument.scalar(slot, .i64);
+}
+
+///operandFromByte decodes a byte operand into a literal or an argument.
+pub fn operandFromByte(byte: u8) Operand {
+    if (argumentFromByte(byte)) |argument| {
+        return .{ .argument = argument };
+    }
+    return .{ .literal = byte };
+}
+
+fn asmOperand(operand: Operand) !asmx64.Operand {
+    return switch (operand) {
+        .literal => |val| .{ .imm = val },
+        .argument => |argument| {
+            if (argument.isFloat()) return error.UnsupportedArgumentType;
+            return .{ .reg = asmx64.gprArgRegister(argument.arg_num) };
+        },
+    };
+}
+
 
 pub const CallTable = struct {
     indexMap: std.StringHashMap(usize),
+    //argCounts stores how many scalar arguments each declared function accepts.
+    argCounts: std.StringHashMap(usize),
     //cur_index consisting of last used index in callTable. It's necessary for performance
     cur_index: usize,
     size: usize,
@@ -30,6 +102,7 @@ pub const CallTable = struct {
     pub fn init(allocator: std.mem.Allocator) !CallTable {
         return CallTable{
             .indexMap = std.StringHashMap(usize).init(allocator),
+            .argCounts = std.StringHashMap(usize).init(allocator),
             .size = standardCTsize,
             .cur_index = 0,
             .callTable = try allocator.alloc(usize, standardCTsize),
@@ -42,9 +115,32 @@ pub const CallTable = struct {
             self.allocator.free(key.*);
         }
         self.indexMap.deinit();
+
+        var arg_it = self.argCounts.keyIterator();
+        while (arg_it.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.argCounts.deinit();
+
         self.cur_index = 0;
         self.size = 0;
         self.allocator.free(self.callTable);
+    }
+
+    pub fn addArgCount(self: *CallTable, key: []const u8, count: usize) !void {
+        if (self.argCounts.getPtr(key)) |existing| {
+            existing.* = count;
+            return;
+        }
+
+        const key_cpy = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(key_cpy);
+
+        try self.argCounts.put(key_cpy, count);
+    }
+
+    pub fn getArgCount(self: *CallTable, key: []const u8) ?usize {
+        return self.argCounts.get(key);
     }
 
     pub fn addIndexMapRecord(self: *CallTable, key: []const u8, value: usize) !void {
@@ -74,6 +170,7 @@ pub const CallTable = struct {
         self.callTable[index] = ptr;
     }
 };
+
 
 pub fn gen_module(parser: *pf.FileParser, ct: *CallTable) !void {
     const module = parser.program.getPtr(parser.cur_file) orelse return error.ModuleNotFound;
@@ -131,6 +228,8 @@ pub fn gen_func(parser: *pf.FileParser, ct: *CallTable) !void {
 
     module.emit.ip = header.next_ip;
 
+    try ct.addArgCount(name, args_cnt);
+
     const func_addr = @intFromPtr(&module.machcode.buffer[module.machcode.ip]);
     if (builtin.cpu.arch == .x86_64) {
         try asmx64.fun_prologue(&module.machcode, local_cnt);
@@ -166,28 +265,63 @@ fn code_gen_inst(parser: *pf.FileParser, ct: *CallTable, instr: decoder.Instruct
         if (builtin.cpu.arch == .x86_64) {
             switch (instr.opcode) {
                 .dup => try asmx64.instr_dup(&module.machcode),
-                .push => try asmx64.instr_push(&module.machcode, u8, instr.operands[0]),
+                .push => switch (operandFromByte(instr.operands[0])) {
+                    .literal => |val| try asmx64.instr_push(&module.machcode, u8, @intCast(val)),
+                    .argument => |argument| {
+                        if (argument.isFloat()) return error.UnsupportedArgumentType;
+                        try asmx64.instr_push_arg(&module.machcode, argument.arg_num);
+                    },
+                },
                 .rem => try asmx64.instr_rem(&module.machcode),
-                .add => try asmx64.instr_add(&module.machcode, 0, 0),
-                .sub => try asmx64.instr_sub(&module.machcode, 0, 0),
-                .mul => try asmx64.instr_mul(&module.machcode, 0, 0),
-                .div => try asmx64.instr_div(&module.machcode, 0, 1),
+                .add => try asmx64.instr_binop(
+                    &module.machcode,
+                    .add,
+                    try asmOperand(operandFromByte(instr.operands[0])),
+                    try asmOperand(operandFromByte(instr.operands[1])),
+                ),
+                .sub => try asmx64.instr_binop(
+                    &module.machcode,
+                    .sub,
+                    try asmOperand(operandFromByte(instr.operands[0])),
+                    try asmOperand(operandFromByte(instr.operands[1])),
+                ),
+                .mul => try asmx64.instr_binop(
+                    &module.machcode,
+                    .mul,
+                    try asmOperand(operandFromByte(instr.operands[0])),
+                    try asmOperand(operandFromByte(instr.operands[1])),
+                ),
+                .div => try asmx64.instr_binop(
+                    &module.machcode,
+                    .divide,
+                    try asmOperand(operandFromByte(instr.operands[0])),
+                    try asmOperand(operandFromByte(instr.operands[1])),
+                ),
                 .ret => {
                     const ret_value = instr.operands[0];
                     switch (ret_value) {
                         @intFromEnum(opcodes.RetExtension.void) => try asmx64.instr_ret(&module.machcode, .void, 0),
                         @intFromEnum(opcodes.RetExtension.stack) => try asmx64.instr_ret(&module.machcode, .stack, 0),
-                        else => try asmx64.instr_ret(&module.machcode, .val, ret_value),
+                        else => {
+                            if (argumentFromByte(ret_value)) |argument| {
+                                if (argument.isFloat()) return error.UnsupportedArgumentType;
+                                try asmx64.instr_ret_arg(&module.machcode, argument.arg_num);
+                            } else {
+                                try asmx64.instr_ret(&module.machcode, .val, ret_value);
+                            }
+                        },
                     }
                 },
                 .invoke => {
                     const fn_name = decoder.nameFromOperands(instr.operands);
                     const fn_index = ct.indexMap.get(fn_name) orelse return error.UnknownFunction;
-                    try asmx64.instr_invoke(
+                    const arg_count = ct.getArgCount(fn_name) orelse 0;
+                    try asmx64.instr_invoke_args(
                         &module.machcode,
                         @intFromPtr(ct.callTable.ptr),
                         fn_index,
                         @sizeOf(usize),
+                        arg_count,
                     );
                 },
                 .end_prg => return @intFromEnum(opcodes.Opcode.end_prg),
@@ -210,6 +344,60 @@ fn loadModule(allocator: std.mem.Allocator, name: []const u8, bytes: []const u8)
     try parser.writeFile(name);
 
     return parser;
+}
+
+test "operandFromByte decodes scalar arguments" {
+    try testing.expectEqual(TypeId.i64, argumentFromByte(0x1A).?.val.typ);
+    try testing.expectEqual(args.ArgSlot.arg1, argumentFromByte(0x1A).?.arg_num);
+    try testing.expectEqual(args.ArgSlot.arg6, argumentFromByte(0x6A).?.arg_num);
+    try testing.expect(argumentFromByte(0x00) == null);
+
+    switch (operandFromByte(0x2A)) {
+        .argument => |argument| try testing.expectEqual(args.ArgSlot.arg2, argument.arg_num),
+        .literal => try testing.expect(false),
+    }
+    switch (operandFromByte(0x07)) {
+        .argument => try testing.expect(false),
+        .literal => |val| try testing.expectEqual(@as(u64, 7), val),
+    }
+}
+
+test "test gen_func_body pushes an argument register" {
+    const allocator = testing.allocator;
+    const name = "gen_func_body_arg_push.afton";
+    defer fs_compat.deleteFile(name) catch {};
+
+    const program = [_]u8{ @intFromEnum(opcodes.Opcode.push), @intFromEnum(args.ArgSlot.arg1), @intFromEnum(opcodes.Opcode.end) };
+    var parser = try loadModule(allocator, name, &program);
+    defer parser.deinit();
+
+    var ct = try CallTable.init(allocator);
+    defer ct.deinit();
+
+    try gen_func_body(&parser, &ct);
+
+    const module = parser.program.getPtr(name).?;
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x41, 0x50 }, module.machcode.buffer[0..module.machcode.ip]);
+}
+
+test "test gen_func records the argument count" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const name = "gen_func_args.afton";
+    defer fs_compat.deleteFile(name) catch {};
+
+    const program = [_]u8{ @intFromEnum(opcodes.Opcode.fn_decl), 1, 'f', 0, 0, 2, @intFromEnum(opcodes.Opcode.ret), @intFromEnum(opcodes.RetExtension.void), @intFromEnum(opcodes.Opcode.end) };
+    var parser = try loadModule(allocator, name, &program);
+    defer parser.deinit();
+
+    var ct = try CallTable.init(allocator);
+    defer ct.deinit();
+
+    try gen_func(&parser, &ct);
+
+    try testing.expectEqual(@as(?usize, 2), ct.getArgCount("f"));
 }
 
 test "test gen_func_body on happy path" {

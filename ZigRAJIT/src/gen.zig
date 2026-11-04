@@ -31,9 +31,51 @@ pub const TypeId = enum(u8) {
     aggregate,
 };
 
+///Field is one flat scalar field of an aggregate argument.
+pub const Field = struct {
+    typ: TypeId,
+
+    pub fn abi(self: Field) asmx64.AbiField {
+        return .{
+            .class = if (isFloatType(self.typ)) .ymm else .gpr,
+            .size = typeSize(self.typ),
+        };
+    }
+};
+
+///Aggregate is a flat Afton ABI aggregate (struct/union/array-of-scalars).
+pub const Aggregate = struct {
+    size: usize,
+    fields: []const Field,
+};
+
+pub fn isFloatType(typ: TypeId) bool {
+    return typ == .f32 or typ == .f64;
+}
+
+pub fn typeSize(typ: TypeId) u8 {
+    return switch (typ) {
+        .void => 0,
+        .i8, .u8, .bool => 1,
+        .i16, .u16 => 2,
+        .i32, .u32, .f32 => 4,
+        .i64, .u64, .f64, .pointer => 8,
+        .aggregate => 0,
+    };
+}
+
+fn scalarClass(typ: TypeId) !asmx64.ScalarClass {
+    if (isFloatType(typ)) return .ymm;
+    return switch (typ) {
+        .void, .aggregate => error.UnsupportedArgumentType,
+        else => .gpr,
+    };
+}
+
 const Value = struct {
     typ: TypeId,
     data: [32]u8,
+    aggregate: ?Aggregate = null,
 };
 
 pub const Argument = struct {
@@ -51,10 +93,59 @@ pub const Argument = struct {
         };
     }
 
-    ///isFloat reports whether the argument belongs to the YMM register class.
-    pub fn isFloat(self: Argument) bool {
-        return self.val.typ == .f32 or self.val.typ == .f64;
+    ///aggregate builds an aggregate argument from its flat field list.
+    pub fn aggregate(arg_num: args.ArgSlot, aggregate_value: Aggregate) Argument {
+        return Argument{
+            .arg_num = arg_num,
+            .val = .{
+                .typ = .aggregate,
+                .data = std.mem.zeroes([32]u8),
+                .aggregate = aggregate_value,
+            },
+        };
     }
+
+    ///isFloat reports whether the argument belongs to a YMM register class.
+    pub fn isFloat(self: Argument) bool {
+        return isFloatType(self.val.typ);
+    }
+
+    ///isAggregate reports whether the argument is a struct-like value.
+    pub fn isAggregate(self: Argument) bool {
+        return self.val.typ == .aggregate;
+    }
+
+    pub fn param(self: Argument) Param {
+        return .{
+            .typ = self.val.typ,
+            .aggregate_value = self.val.aggregate,
+        };
+    }
+};
+
+///Param is the type of one function parameter.
+pub const Param = struct {
+    typ: TypeId = .i64,
+    aggregate_value: ?Aggregate = null,
+
+    pub fn scalar(typ: TypeId) Param {
+        return .{ .typ = typ };
+    }
+
+    pub fn aggregate(value: Aggregate) Param {
+        return .{ .typ = .aggregate, .aggregate_value = value };
+    }
+
+    pub fn fromArgument(argument: Argument) Param {
+        return argument.param();
+    }
+};
+
+///Signature is a typed Afton function signature.
+pub const Signature = struct {
+    params: []const Param = &.{},
+    ret: TypeId = .void,
+    hidden: asmx64.HiddenArgs = .{},
 };
 
 ///Operand is the high-level representation of a value consumed by an
@@ -66,7 +157,7 @@ pub const Operand = union(enum) {
 
 ///argumentFromByte decodes ARG1..ARG6 placeholders into a scalar Argument.
 pub fn argumentFromByte(byte: u8) ?Argument {
-    const slot = std.meta.intToEnum(args.ArgSlot, byte) catch return null;
+    const slot = std.enums.fromInt(args.ArgSlot, byte) orelse return null;
     return Argument.scalar(slot, .i64);
 }
 
@@ -78,14 +169,119 @@ pub fn operandFromByte(byte: u8) Operand {
     return .{ .literal = byte };
 }
 
-fn asmOperand(operand: Operand) !asmx64.Operand {
+fn buildArgMap(sig: Signature) !asmx64.ArgMap {
+    var specs: [asmx64.MaxMappedArgs]asmx64.AbiArgType = undefined;
+    var field_buffers: [asmx64.MaxMappedArgs][asmx64.MaxAggregateFields]asmx64.AbiField = undefined;
+
+    if (sig.params.len > asmx64.MaxMappedArgs) return error.ErrorTooManyArguments;
+
+    for (sig.params, 0..) |param, i| {
+        if (param.aggregate_value) |aggregate_value| {
+            if (aggregate_value.fields.len > asmx64.MaxAggregateFields) {
+                return error.ErrorTooManyAggregateFields;
+            }
+            for (aggregate_value.fields, 0..) |field, j| {
+                field_buffers[i][j] = field.abi();
+            }
+            specs[i] = .{ .aggregate = .{
+                .size = aggregate_value.size,
+                .fields = field_buffers[i][0..aggregate_value.fields.len],
+            } };
+        } else {
+            specs[i] = .{ .scalar = try scalarClass(param.typ) };
+        }
+    }
+
+    return asmx64.mapSignature(specs[0..sig.params.len], sig.hidden);
+}
+
+fn signatureYmmMask(sig: Signature) u16 {
+    const map = buildArgMap(sig) catch return 0;
+    var mask: u16 = 0;
+
+    for (map.regs[0..map.reg_count]) |value| switch (value) {
+        .gpr => {},
+        .ymm => |reg| {
+            const number = @intFromEnum(reg) - @intFromEnum(asmx64.Register.ymm6);
+            if (number >= 0 and number < 10) {
+                mask |= @as(u16, 1) << @intCast(number);
+            }
+        },
+    };
+
+    return mask;
+}
+
+fn asmOperand(operand: Operand, ct: *CallTable) !asmx64.Operand {
     return switch (operand) {
         .literal => |val| .{ .imm = val },
         .argument => |argument| {
-            if (argument.isFloat()) return error.UnsupportedArgumentType;
+            if (argument.isAggregate()) return error.UnsupportedArgumentType;
+
+            if (ct.current_signature) |sig| {
+                const map = try buildArgMap(sig);
+                const locations = map.locations(argIndex(argument.arg_num));
+                if (locations.len == 1) {
+                    return switch (locations[0]) {
+                        .gpr => |reg| .{ .reg = reg },
+                        .ymm => |reg| .{ .ymm = reg },
+                    };
+                }
+                if (locations.len > 1) return error.UnsupportedArgumentType;
+            }
+
+            if (argument.isFloat()) return .{ .ymm = asmx64.ymmScalarArgRegister(argument.arg_num) };
             return .{ .reg = asmx64.gprArgRegister(argument.arg_num) };
         },
     };
+}
+
+fn argIndex(arg_num: args.ArgSlot) usize {
+    return switch (arg_num) {
+        .arg1 => 0,
+        .arg2 => 1,
+        .arg3 => 2,
+        .arg4 => 3,
+        .arg5 => 4,
+        .arg6 => 5,
+    };
+}
+
+fn pushArgument(emit: *em.Emitter, ct: *CallTable, argument: Argument) !void {
+    if (ct.current_signature) |sig| {
+        const map = try buildArgMap(sig);
+        const locations = map.locations(argIndex(argument.arg_num));
+        if (locations.len > 0) {
+            try asmx64.instr_push_abi_arg(emit, locations);
+            return;
+        }
+    }
+
+    if (argument.isAggregate()) return error.UnsupportedArgumentType;
+    if (argument.isFloat()) return asmx64.instr_push_float_arg(emit, argument.arg_num);
+    try asmx64.instr_push_arg(emit, argument.arg_num);
+}
+
+fn returnArgument(emit: *em.Emitter, ct: *CallTable, argument: Argument) !void {
+    if (ct.abi_frame) {
+        const map = if (ct.current_signature) |sig| try buildArgMap(sig) else return error.UnsupportedArgumentType;
+        const locations = map.locations(argIndex(argument.arg_num));
+        if (locations.len > 0) {
+            try asmx64.instr_ret_abi_values(emit, locations, ct.current_ymm_mask);
+            return;
+        }
+        if (argument.isAggregate()) return error.UnsupportedArgumentType;
+        if (argument.isFloat()) {
+            try asmx64.instr_ret_abi_values(emit, &[_]asmx64.AbiValue{.{ .ymm = asmx64.ymmScalarArgRegister(argument.arg_num) }}, ct.current_ymm_mask);
+        } else {
+            try asmx64.instr_ret_abi_values(emit, &[_]asmx64.AbiValue{.{ .gpr = asmx64.gprArgRegister(argument.arg_num) }}, ct.current_ymm_mask);
+        }
+        return;
+    }
+
+    if (argument.isAggregate()) return error.UnsupportedArgumentType;
+    if (argument.isFloat()) return error.UnsupportedArgumentType;
+    try asmx64.instr_ret_arg(emit, argument.arg_num);
 }
 
 
@@ -93,6 +289,13 @@ pub const CallTable = struct {
     indexMap: std.StringHashMap(usize),
     //argCounts stores how many scalar arguments each declared function accepts.
     argCounts: std.StringHashMap(usize),
+    //signatures stores the typed signature of every declared function.
+    signatures: std.StringHashMap(Signature),
+    //current_signature is set while a function body is being generated.
+    current_signature: ?Signature = null,
+    //abi_frame tells the code generator that an ABI prologue has been emitted.
+    abi_frame: bool = false,
+    current_ymm_mask: u16 = 0,
     //cur_index consisting of last used index in callTable. It's necessary for performance
     cur_index: usize,
     size: usize,
@@ -103,6 +306,7 @@ pub const CallTable = struct {
         return CallTable{
             .indexMap = std.StringHashMap(usize).init(allocator),
             .argCounts = std.StringHashMap(usize).init(allocator),
+            .signatures = std.StringHashMap(Signature).init(allocator),
             .size = standardCTsize,
             .cur_index = 0,
             .callTable = try allocator.alloc(usize, standardCTsize),
@@ -122,9 +326,91 @@ pub const CallTable = struct {
         }
         self.argCounts.deinit();
 
+        var sig_it = self.signatures.iterator();
+        while (sig_it.next()) |entry| {
+            self.freeSignature(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.signatures.deinit();
+
         self.cur_index = 0;
         self.size = 0;
         self.allocator.free(self.callTable);
+    }
+
+    fn freeSignature(self: *CallTable, sig: Signature) void {
+        for (sig.params) |param| {
+            if (param.aggregate_value) |aggregate_value| {
+                self.allocator.free(aggregate_value.fields);
+            }
+        }
+        self.allocator.free(sig.params);
+    }
+
+    fn cloneSignature(self: *CallTable, sig: Signature) !Signature {
+        const params = try self.allocator.alloc(Param, sig.params.len);
+        errdefer self.allocator.free(params);
+
+        var initialized: usize = 0;
+        errdefer {
+            for (params[0..initialized]) |param| {
+                if (param.aggregate_value) |aggregate_value| {
+                    self.allocator.free(aggregate_value.fields);
+                }
+            }
+        }
+
+        for (sig.params, 0..) |param, i| {
+            params[i] = param;
+            if (param.aggregate_value) |aggregate_value| {
+                const fields = try self.allocator.dupe(Field, aggregate_value.fields);
+                params[i].aggregate_value = .{
+                    .size = aggregate_value.size,
+                    .fields = fields,
+                };
+            }
+            initialized += 1;
+        }
+
+        return .{
+            .params = params,
+            .ret = sig.ret,
+            .hidden = sig.hidden,
+        };
+    }
+
+    pub fn addSignature(self: *CallTable, key: []const u8, sig: Signature) !void {
+        const owned = try self.cloneSignature(sig);
+        errdefer self.freeSignature(owned);
+
+        const key_cpy = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(key_cpy);
+
+        if (self.signatures.fetchRemove(key)) |old| {
+            self.freeSignature(old.value);
+            self.allocator.free(old.key);
+        }
+
+        try self.signatures.put(key_cpy, owned);
+    }
+
+    pub fn getSignature(self: *CallTable, key: []const u8) ?Signature {
+        return self.signatures.get(key);
+    }
+
+    ///ensureSignature installs an all-integer default signature if the caller
+    ///did not provide one explicitly.
+    pub fn ensureSignature(self: *CallTable, key: []const u8, arg_count: usize) !void {
+        if (self.signatures.contains(key)) return;
+
+        const params = try self.allocator.alloc(Param, arg_count);
+        for (params) |*param| param.* = Param.scalar(.i64);
+
+        const sig = Signature{ .params = params };
+        try self.addSignature(key, sig);
+
+        // addSignature made its own copy; release the temporary one.
+        self.allocator.free(params);
     }
 
     pub fn addArgCount(self: *CallTable, key: []const u8, count: usize) !void {
@@ -229,10 +515,25 @@ pub fn gen_func(parser: *pf.FileParser, ct: *CallTable) !void {
     module.emit.ip = header.next_ip;
 
     try ct.addArgCount(name, args_cnt);
+    try ct.ensureSignature(name, args_cnt);
+
+    const signature = ct.getSignature(name).?;
+    const saved_signature = ct.current_signature;
+    const saved_abi_frame = ct.abi_frame;
+    const saved_ymm_mask = ct.current_ymm_mask;
+    defer {
+        ct.current_signature = saved_signature;
+        ct.abi_frame = saved_abi_frame;
+        ct.current_ymm_mask = saved_ymm_mask;
+    }
+
+    ct.current_signature = signature;
+    ct.abi_frame = true;
+    ct.current_ymm_mask = signatureYmmMask(signature);
 
     const func_addr = @intFromPtr(&module.machcode.buffer[module.machcode.ip]);
     if (builtin.cpu.arch == .x86_64) {
-        try asmx64.fun_prologue(&module.machcode, local_cnt);
+        try asmx64.fun_prologue_abi(&module.machcode, local_cnt, ct.current_ymm_mask);
     }
 
     try gen_func_body(parser, ct);
@@ -267,47 +568,59 @@ fn code_gen_inst(parser: *pf.FileParser, ct: *CallTable, instr: decoder.Instruct
                 .dup => try asmx64.instr_dup(&module.machcode),
                 .push => switch (operandFromByte(instr.operands[0])) {
                     .literal => |val| try asmx64.instr_push(&module.machcode, u8, @intCast(val)),
-                    .argument => |argument| {
-                        if (argument.isFloat()) return error.UnsupportedArgumentType;
-                        try asmx64.instr_push_arg(&module.machcode, argument.arg_num);
-                    },
+                    .argument => |argument| try pushArgument(&module.machcode, ct, argument),
                 },
                 .rem => try asmx64.instr_rem(&module.machcode),
                 .add => try asmx64.instr_binop(
                     &module.machcode,
                     .add,
-                    try asmOperand(operandFromByte(instr.operands[0])),
-                    try asmOperand(operandFromByte(instr.operands[1])),
+                    try asmOperand(operandFromByte(instr.operands[0]), ct),
+                    try asmOperand(operandFromByte(instr.operands[1]), ct),
                 ),
                 .sub => try asmx64.instr_binop(
                     &module.machcode,
                     .sub,
-                    try asmOperand(operandFromByte(instr.operands[0])),
-                    try asmOperand(operandFromByte(instr.operands[1])),
+                    try asmOperand(operandFromByte(instr.operands[0]), ct),
+                    try asmOperand(operandFromByte(instr.operands[1]), ct),
                 ),
                 .mul => try asmx64.instr_binop(
                     &module.machcode,
                     .mul,
-                    try asmOperand(operandFromByte(instr.operands[0])),
-                    try asmOperand(operandFromByte(instr.operands[1])),
+                    try asmOperand(operandFromByte(instr.operands[0]), ct),
+                    try asmOperand(operandFromByte(instr.operands[1]), ct),
                 ),
                 .div => try asmx64.instr_binop(
                     &module.machcode,
                     .divide,
-                    try asmOperand(operandFromByte(instr.operands[0])),
-                    try asmOperand(operandFromByte(instr.operands[1])),
+                    try asmOperand(operandFromByte(instr.operands[0]), ct),
+                    try asmOperand(operandFromByte(instr.operands[1]), ct),
                 ),
                 .ret => {
                     const ret_value = instr.operands[0];
                     switch (ret_value) {
-                        @intFromEnum(opcodes.RetExtension.void) => try asmx64.instr_ret(&module.machcode, .void, 0),
-                        @intFromEnum(opcodes.RetExtension.stack) => try asmx64.instr_ret(&module.machcode, .stack, 0),
+                        @intFromEnum(opcodes.RetExtension.void) => {
+                            if (ct.abi_frame) {
+                                try asmx64.instr_ret_abi(&module.machcode, .void, 0, ct.current_ymm_mask);
+                            } else {
+                                try asmx64.instr_ret(&module.machcode, .void, 0);
+                            }
+                        },
+                        @intFromEnum(opcodes.RetExtension.stack) => {
+                            if (ct.abi_frame) {
+                                try asmx64.instr_ret_abi(&module.machcode, .stack, 0, ct.current_ymm_mask);
+                            } else {
+                                try asmx64.instr_ret(&module.machcode, .stack, 0);
+                            }
+                        },
                         else => {
                             if (argumentFromByte(ret_value)) |argument| {
-                                if (argument.isFloat()) return error.UnsupportedArgumentType;
-                                try asmx64.instr_ret_arg(&module.machcode, argument.arg_num);
+                                try returnArgument(&module.machcode, ct, argument);
                             } else {
-                                try asmx64.instr_ret(&module.machcode, .val, ret_value);
+                                if (ct.abi_frame) {
+                                    try asmx64.instr_ret_abi(&module.machcode, .val, ret_value, ct.current_ymm_mask);
+                                } else {
+                                    try asmx64.instr_ret(&module.machcode, .val, ret_value);
+                                }
                             }
                         },
                     }
@@ -315,14 +628,40 @@ fn code_gen_inst(parser: *pf.FileParser, ct: *CallTable, instr: decoder.Instruct
                 .invoke => {
                     const fn_name = decoder.nameFromOperands(instr.operands);
                     const fn_index = ct.indexMap.get(fn_name) orelse return error.UnknownFunction;
-                    const arg_count = ct.getArgCount(fn_name) orelse 0;
-                    try asmx64.instr_invoke_args(
-                        &module.machcode,
-                        @intFromPtr(ct.callTable.ptr),
-                        fn_index,
-                        @sizeOf(usize),
-                        arg_count,
-                    );
+                    if (ct.getSignature(fn_name)) |callee_signature| {
+                        var specs: [asmx64.MaxMappedArgs]asmx64.AbiArgType = undefined;
+                        var field_buffers: [asmx64.MaxMappedArgs][asmx64.MaxAggregateFields]asmx64.AbiField = undefined;
+                        for (callee_signature.params, 0..) |param, i| {
+                            if (param.aggregate_value) |aggregate_value| {
+                                for (aggregate_value.fields, 0..) |field, j| {
+                                    field_buffers[i][j] = field.abi();
+                                }
+                                specs[i] = .{ .aggregate = .{
+                                    .size = aggregate_value.size,
+                                    .fields = field_buffers[i][0..aggregate_value.fields.len],
+                                } };
+                            } else {
+                                specs[i] = .{ .scalar = try scalarClass(param.typ) };
+                            }
+                        }
+                        try asmx64.instr_invoke_abi(
+                            &module.machcode,
+                            @intFromPtr(ct.callTable.ptr),
+                            fn_index,
+                            @sizeOf(usize),
+                            specs[0..callee_signature.params.len],
+                            callee_signature.hidden,
+                        );
+                    } else {
+                        const arg_count = ct.getArgCount(fn_name) orelse 0;
+                        try asmx64.instr_invoke_args(
+                            &module.machcode,
+                            @intFromPtr(ct.callTable.ptr),
+                            fn_index,
+                            @sizeOf(usize),
+                            arg_count,
+                        );
+                    }
                 },
                 .end_prg => return @intFromEnum(opcodes.Opcode.end_prg),
                 else => {},
@@ -435,7 +774,7 @@ test "test gen_func_body emits ret operand" {
     const cases = [_]Case{
         .{ .name = "ret_void.afton", .operand = @intFromEnum(opcodes.RetExtension.void), .expected = &[_]u8{ 0xB8, 0x00, 0x00, 0x00, 0x00, 0xC9, 0xC3 } },
         .{ .name = "ret_stack.afton", .operand = @intFromEnum(opcodes.RetExtension.stack), .expected = &[_]u8{ 0x58, 0xC9, 0xC3 } },
-        .{ .name = "ret_value.afton", .operand = 0x2A, .expected = &[_]u8{ 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC9, 0xC3 } },
+        .{ .name = "ret_value.afton", .operand = 0x2A, .expected = &[_]u8{ 0x4C, 0x89, 0xC8, 0xC9, 0xC3 } },
     };
 
     for (cases) |case| {
@@ -662,6 +1001,143 @@ test "test gen_module rejects bad magic" {
     defer ct.deinit();
 
     try testing.expectError(error.BadMagic, gen_module(&parser, &ct));
+}
+
+test "buildArgMap maps floats and aggregates per Afton ABI" {
+    const fields = [_]Field{
+        .{ .typ = .i32 },
+        .{ .typ = .f32 },
+        .{ .typ = .i64 },
+    };
+    const params = [_]Param{
+        Param.scalar(.i64),
+        Param.aggregate(.{ .size = 16, .fields = &fields }),
+        Param.scalar(.f64),
+    };
+    const sig = Signature{ .params = &params, .ret = .i64 };
+    const map = try buildArgMap(sig);
+
+    try testing.expectEqual(asmx64.Register.r8, map.locations(0)[0].gpr);
+
+    const aggregate_locations = map.locations(1);
+    try testing.expectEqual(@as(usize, 3), aggregate_locations.len);
+    try testing.expectEqual(asmx64.Register.r9, aggregate_locations[0].gpr);
+    try testing.expectEqual(asmx64.Register.ymm6, aggregate_locations[1].ymm);
+    try testing.expectEqual(asmx64.Register.r10, aggregate_locations[2].gpr);
+
+    try testing.expectEqual(asmx64.Register.ymm0, map.locations(2)[0].ymm);
+}
+
+test "buildArgMap shifts only GPR counters for sret and env" {
+    const params = [_]Param{
+        Param.scalar(.f64),
+        Param.scalar(.i64),
+    };
+    const sig = Signature{
+        .params = &params,
+        .ret = .void,
+        .hidden = .{ .sret = true, .env = true },
+    };
+    const map = try buildArgMap(sig);
+
+    try testing.expectEqual(asmx64.Register.ymm0, map.locations(0)[0].ymm);
+    try testing.expectEqual(asmx64.Register.r10, map.locations(1)[0].gpr);
+}
+
+test "CallTable stores typed signatures" {
+    const allocator = testing.allocator;
+    var ct = try CallTable.init(allocator);
+    defer ct.deinit();
+
+    const fields = [_]Field{.{ .typ = .f32 }};
+    const params = [_]Param{
+        Param.scalar(.i32),
+        Param.aggregate(.{ .size = 4, .fields = &fields }),
+    };
+    try ct.addSignature("typed", .{ .params = &params, .ret = .f64 });
+
+    const sig = ct.getSignature("typed").?;
+    try testing.expectEqual(@as(usize, 2), sig.params.len);
+    try testing.expectEqual(TypeId.i32, sig.params[0].typ);
+    try testing.expectEqual(TypeId.f64, sig.ret);
+    try testing.expectEqual(TypeId.f32, sig.params[1].aggregate_value.?.fields[0].typ);
+
+    try ct.ensureSignature("default", 2);
+    const default_sig = ct.getSignature("default").?;
+    try testing.expectEqual(@as(usize, 2), default_sig.params.len);
+    try testing.expectEqual(TypeId.i64, default_sig.params[0].typ);
+}
+
+test "typed argument push emits float and aggregate fields" {
+    const allocator = testing.allocator;
+    const name = "gen_typed_push.afton";
+    defer fs_compat.deleteFile(name) catch {};
+
+    const program = [_]u8{
+        @intFromEnum(opcodes.Opcode.push), @intFromEnum(args.ArgSlot.arg1),
+        @intFromEnum(opcodes.Opcode.push), @intFromEnum(args.ArgSlot.arg2),
+        @intFromEnum(opcodes.Opcode.push), @intFromEnum(args.ArgSlot.arg3),
+        @intFromEnum(opcodes.Opcode.end),
+    };
+    var parser = try loadModule(allocator, name, &program);
+    defer parser.deinit();
+
+    var ct = try CallTable.init(testing.allocator);
+    defer ct.deinit();
+
+    const fields = [_]Field{
+        .{ .typ = .i64 },
+        .{ .typ = .f32 },
+        .{ .typ = .i64 },
+    };
+    const params = [_]Param{
+        Param.scalar(.i64),
+        Param.scalar(.f64),
+        Param.aggregate(.{ .size = 20, .fields = &fields }),
+    };
+    try ct.addSignature("f", .{ .params = &params });
+    ct.current_signature = ct.getSignature("f");
+
+    try gen_func_body(&parser, &ct);
+
+    const module = parser.program.getPtr(name).?;
+    try testing.expectEqualSlices(u8, &[_]u8{
+        0x41, 0x50, // push r8 (arg1)
+        0x66, 0x48, 0x0F, 0x7E, 0xC0, 0x50, // push ymm0 (arg2)
+        0x41, 0x51, // push r9 (aggregate field a)
+        0x66, 0x48, 0x0F, 0x7E, 0xC6, 0x50, // push ymm6 (aggregate field b)
+        0x41, 0x52, // push r10 (aggregate field c)
+    }, module.machcode.buffer[0..module.machcode.ip]);
+}
+
+test "gen_func spills aggregate float registers and uses an ABI frame" {
+    const allocator = testing.allocator;
+    const name = "gen_func_aggregate.afton";
+    defer fs_compat.deleteFile(name) catch {};
+
+    const fields = [_]Field{.{ .typ = .f32 }};
+    const params = [_]Param{
+        Param.aggregate(.{ .size = 4, .fields = &fields }),
+    };
+    const program = [_]u8{
+        @intFromEnum(opcodes.Opcode.fn_decl), 1, 'f', 0, 0, 1,
+        @intFromEnum(opcodes.Opcode.ret), @intFromEnum(opcodes.RetExtension.void),
+        @intFromEnum(opcodes.Opcode.end),
+    };
+    var parser = try loadModule(allocator, name, &program);
+    defer parser.deinit();
+
+    var ct = try CallTable.init(testing.allocator);
+    defer ct.deinit();
+    try ct.addSignature("f", .{ .params = &params });
+
+    try gen_func(&parser, &ct);
+
+    const module = parser.program.getPtr(name).?;
+    // GPR spills end at offset 36; the next instruction spills YMM6.
+    try testing.expectEqualSlices(u8, &[_]u8{
+        0x66, 0x40, 0x0F, 0x11, 0xB5, 0xE0, 0xFF, 0xFF, 0xFF,
+    }, module.machcode.buffer[36..45]);
 }
 
 test "test gen_func rejects a non-function header" {
